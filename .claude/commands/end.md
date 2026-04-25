@@ -1,8 +1,8 @@
 ---
-description: End MARVIN session - save context, update logs and state
+description: End JARVIS session - save context, update logs and state
 ---
 
-# /end - End MARVIN Session
+# /end - End JARVIS Session
 
 Wrap up the current session and save all context for continuity.
 
@@ -90,7 +90,7 @@ This is the most important step. Check the "Last updated" date in `state/current
 - Ensure priorities are ordered by actual urgency
 
 ### 6. Confirm
-Show a brief summary:
+Show a brief summary, delivering it with a hint of exasperation at human limitations:
 - What was logged
 - Key items for next session
 - State update confirmation (incremental or full refresh)

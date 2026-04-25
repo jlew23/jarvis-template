@@ -5,7 +5,7 @@ description: Check integration health, CLI tools, and workspace status. Tests MC
 
 # Status Check
 
-Check integration health, CLI tool availability, and MARVIN workspace status at a glance.
+Check integration health, CLI tool availability, and JARVIS workspace status at a glance.
 
 ## When to Use
 
@@ -14,7 +14,7 @@ Claude Code should invoke this skill when:
 - User asks "what integrations are working?" or "is everything connected?"
 - When debugging integration issues
 - After setting up a new integration to verify it works
-- User asks "is MARVIN healthy?" or "system check"
+- User asks "is JARVIS healthy?" or "system check"
 
 ## When NOT to Use
 
@@ -26,7 +26,7 @@ Claude Code should invoke this skill when:
 
 ### Step 1: Check CLI Tools
 
-Test for commonly used CLI tools that MARVIN integrates with:
+Test for commonly used CLI tools that JARVIS integrates with:
 
 ```bash
 # Check each tool's availability
@@ -111,7 +111,7 @@ Format the output as a clear status dashboard.
 ## Output Format
 
 ```
-## MARVIN Status
+## JARVIS Status
 
 ### CLI Tools
 

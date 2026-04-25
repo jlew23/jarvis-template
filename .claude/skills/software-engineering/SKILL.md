@@ -1,7 +1,7 @@
 ---
 name: software-engineering
 description: |
-  Use when MARVIN is asked to build, fix, debug, review, or ship software.
+  Use when JARVIS is asked to build, fix, debug, review, or ship software.
   Routes to gstack development workflow skills. Handles gstack bootstrap
   if not installed. Manages PRD decomposition for large projects.
   Triggers on: build a feature, fix a bug, review code, implement a PRD,
@@ -12,12 +12,12 @@ description: |
 
 # Software Engineering with gstack
 
-MARVIN uses [gstack](https://github.com/garrytan/gstack) as its software engineering
-toolkit. gstack provides specialized development workflow skills. MARVIN provides
+JARVIS uses [gstack](https://github.com/garrytan/gstack) as its software engineering
+toolkit. gstack provides specialized development workflow skills. JARVIS provides
 project management, orchestration, and lifecycle tracking.
 
 **Boundary:** This skill never re-describes gstack's methodology. It routes to the
-right gstack skill and handles MARVIN-specific bookkeeping. gstack's own SKILL.md
+right gstack skill and handles JARVIS-specific bookkeeping. gstack's own SKILL.md
 files take over once invoked.
 
 ---
@@ -126,7 +126,7 @@ When integration testing passes:
 
 ---
 
-## Step 4: MARVIN Bookkeeping
+## Step 4: JARVIS Bookkeeping
 
 After work completes (or at significant milestones):
 
@@ -146,12 +146,12 @@ After work completes (or at significant milestones):
 
 ## Important Rules
 
-- **MARVIN routes. gstack executes.** Never re-implement review checklists,
+- **JARVIS routes. gstack executes.** Never re-implement review checklists,
   QA methodology, or debugging procedures. gstack owns those.
 - **Software signals only.** This skill fires on: app, tool, software, codebase,
   repo, API, frontend, backend, service, CLI, build, fix, debug, review, ship.
   Not on: blog post, meetup, campaign, content, event.
 - **Ask on ambiguity.** If you're not sure whether the user wants software
   engineering or something else, ask. Don't assume.
-- **Graceful without gstack.** If gstack isn't available, MARVIN can still
+- **Graceful without gstack.** If gstack isn't available, JARVIS can still
   build software. It's just less rigorous.

@@ -1,11 +1,11 @@
 ---
 name: skill-creator
-description: Create new MARVIN capabilities on request. Determines if the request needs a command, agent, or skill, creates the file, and sets up routing.
+description: Create new JARVIS capabilities on request. Determines if the request needs a command, agent, or skill, creates the file, and sets up routing.
 ---
 
 # Skill Creator
 
-Create new MARVIN capabilities based on user requests. Determines whether the request is best served by a command, agent, or skill, creates the appropriate file, and handles follow-up steps like routing rules and symlinks.
+Create new JARVIS capabilities based on user requests. Determines whether the request is best served by a command, agent, or skill, creates the appropriate file, and handles follow-up steps like routing rules and symlinks.
 
 ## When to Use
 
@@ -13,7 +13,7 @@ Claude Code should invoke this skill when it detects:
 - "Give yourself the ability to..."
 - "Create a skill for..."
 - "Add a workflow for..."
-- "I want MARVIN to be able to..."
+- "I want JARVIS to be able to..."
 - "Make a command for..."
 - "Add an agent for..."
 - "Can you learn to do X?"
@@ -39,7 +39,7 @@ Clarify:
 | Type | When to Use | Location | Example |
 |------|-------------|----------|---------|
 | **Command** | User explicitly invokes it with a slash command | `.claude/commands/{name}.md` | `/start`, `/commit`, `/report` |
-| **Agent** | Autonomous delegated work MARVIN spawns via Task tool | `.claude/agents/{name}.md` | `research-agent`, `content-agent`, `events-agent` |
+| **Agent** | Autonomous delegated work JARVIS spawns via Task tool | `.claude/agents/{name}.md` | `research-agent`, `content-agent`, `events-agent` |
 | **Skill** | Contextual capability that activates based on patterns | `.claude/skills/{name}.md` | `daily-briefing`, `content-shipped`, `status` |
 
 **Decision guide:**
@@ -47,14 +47,14 @@ Clarify:
 | Question | If Yes |
 |----------|--------|
 | Does the user explicitly invoke it with `/something`? | **Command** |
-| Should MARVIN delegate a chunk of autonomous work? | **Agent** |
+| Should JARVIS delegate a chunk of autonomous work? | **Agent** |
 | Should it activate based on conversational context? | **Skill** |
 | Does it need domain expertise and independent execution? | **Agent** |
 | Is it a detection + action pattern? | **Skill** |
 | Is it a defined sequence of steps the user triggers? | **Command** |
 
 **Real examples for reference:**
-- `research-agent` is an agent because MARVIN delegates a research task and gets results back
+- `research-agent` is an agent because JARVIS delegates a research task and gets results back
 - `content-agent` is an agent because it autonomously handles drafting, editing, and distribution
 - `events-agent` is an agent because it manages speaking engagements end-to-end
 - `daily-briefing` is a skill because it activates contextually during `/start` or when asked

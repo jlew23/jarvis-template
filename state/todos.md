@@ -1,6 +1,6 @@
 # Todos
 
-Persistent task list that carries across MARVIN sessions.
+Persistent task list that carries across JARVIS sessions.
 
 **Last updated**: {{DATE}}
 
@@ -30,4 +30,4 @@ Persistent task list that carries across MARVIN sessions.
 
 ---
 
-*This file is updated by MARVIN at session start (load) and session end (save).*
+*This file is updated by JARVIS at session start (load) and session end (save).*

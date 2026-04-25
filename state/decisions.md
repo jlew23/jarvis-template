@@ -1,6 +1,6 @@
 # Decisions Log
 
-Rolling log of decisions made during MARVIN sessions. Referenced by `/start` for recent context.
+Rolling log of decisions made during JARVIS sessions. Referenced by `/start` for recent context.
 
 ---
 

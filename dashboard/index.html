@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JARVIS HUD</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="glass-panel">
+        <header>
+            <div class="logo-area">
+                <div class="blinking-dot"></div>
+                <h1>JARVIS HUD</h1>
+            </div>
+            <div class="header-controls">
+                <button id="voice-toggle" class="control-btn active">🎙️ VOICE: ON</button>
+                <div class="status-indicator">ONLINE</div>
+            </div>
+        </header>
+
+        <div class="tabs">
+            <button class="tab-btn active" data-target="monitor-tab">MONITOR</button>
+            <button class="tab-btn" data-target="commands-tab">COMMANDS</button>
+            <button class="tab-btn" data-target="log-tab">LIVE LOG</button>
+        </div>
+
+        <div class="tab-content active" id="monitor-tab">
+            <div class="dashboard-core">
+                <div class="gauge-container">
+                    <svg viewBox="0 0 200 200" class="circular-chart">
+                        <path class="circle-bg" d="M100,10 a90,90 0 1,1 0,180 a90,90 0 1,1 0,-180" />
+                        <path class="circle" id="progress-circle" stroke-dasharray="0, 565.48" d="M100,10 a90,90 0 1,1 0,180 a90,90 0 1,1 0,-180" />
+                    </svg>
+                    <div class="gauge-content">
+                        <span id="percentage-text">0%</span>
+                        <span class="label">CONTEXT</span>
+                    </div>
+                </div>
+
+                <div class="stats-panel">
+                    <div class="stat-box">
+                        <span class="stat-label">TOKENS USED (EST)</span>
+                        <span class="stat-value" id="tokens-used">0</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-label">CONTEXT LIMIT</span>
+                        <span class="stat-value" id="tokens-limit">32,768</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="warning-banner hidden" id="warning-banner">
+                ⚠️ SEGFAULT IMMINENT: CONTEXT LIMIT CRITICAL. RUN /end TO SAVE CONTEXT.
+            </div>
+        </div>
+
+        <div class="tab-content" id="commands-tab">
+            <div class="commands-grid">
+                <div class="cmd-card">
+                    <div class="cmd-title">/start</div>
+                    <div class="cmd-desc">Boot up the session. JARVIS will read your goals and give you a daily briefing.</div>
+                </div>
+                <div class="cmd-card">
+                    <div class="cmd-title">/update</div>
+                    <div class="cmd-desc">Quickly save your current progress without ending the session.</div>
+                </div>
+                <div class="cmd-card">
+                    <div class="cmd-title">/end</div>
+                    <div class="cmd-desc">Wrap up the day. JARVIS will summarize what was done and save your context for tomorrow.</div>
+                </div>
+                <div class="cmd-card">
+                    <div class="cmd-title">/commit</div>
+                    <div class="cmd-desc">Ask JARVIS to review your uncommitted changes and write a git commit message.</div>
+                </div>
+            </div>
+            <div class="cmd-notes">
+                <p><strong>Note:</strong> To run these, type them into your Aider prompt. JARVIS will execute the corresponding `.claude/commands/` script.</p>
+            </div>
+        </div>
+
+        <div class="tab-content" id="log-tab">
+            <div class="terminal-window">
+                <div class="terminal-header">
+                    <span class="dot red"></span>
+                    <span class="dot yellow"></span>
+                    <span class="dot green"></span>
+                    <span class="terminal-title">~/.aider.chat.history.md</span>
+                </div>
+                <div class="terminal-body" id="log-output">
+Loading log stream...
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>

@@ -6,7 +6,7 @@ description: Scaffold a new software project with gstack dev toolkit
 
 Scaffold a new software project with gstack pre-configured. Creates the directory,
 runs framework scaffolding, wires up gstack, writes CLAUDE.md, and adds the project
-to MARVIN's tracking.
+to JARVIS's tracking.
 
 ## Instructions
 
@@ -36,7 +36,7 @@ If not already clear from conversation context, ask the user:
    - Work projects: ask the user for the work directory
    - Confirm before creating
 
-If MARVIN already brainstormed a spec for this project (check `docs/superpowers/specs/`
+If JARVIS already brainstormed a spec for this project (check `docs/superpowers/specs/`
 and conversation context), pull the name, stack, and description from there.
 
 ### 3. Scaffold the Project
@@ -93,7 +93,7 @@ context to it. If it doesn't exist, create it. Include:
 
 ## Spec
 
-{Link to spec if one exists, e.g.: ~/personal/marvin/docs/superpowers/specs/YYYY-MM-DD-{name}-design.md}
+{Link to spec if one exists, e.g.: ~/personal/jarvis/docs/superpowers/specs/YYYY-MM-DD-{name}-design.md}
 
 ## gstack
 
@@ -107,7 +107,7 @@ git add -A
 git commit -m "feat: scaffold {project-name} with gstack"
 ```
 
-### 7. Update MARVIN Project Tracking
+### 7. Update JARVIS Project Tracking
 
 Add the project to `state/projects.md` under the appropriate section
 (Personal Projects or Work Projects):
