@@ -1,0 +1,9 @@
+[
+  {"name": "Hermes", "role": "Orchestrator", "description": "Lead Orchestrator & Task Strategist", "emoji": "🌐"},
+  {"name": "Claude", "role": "Builder", "description": "Lead Architect & Systems Engineer", "emoji": "🛠️"},
+  {"name": "Codex", "role": "Auditor", "description": "Security, QA & Edge-Case Auditor", "emoji": "🛡️"},
+  {"name": "Letta", "role": "Memory Engine", "description": "Context Keeper & Action Ledger", "emoji": "🧠"},
+  {"name": "Ari", "role": "Operations Watchdog", "description": "Pipeline Watcher & Storyteller Ops", "emoji": "👁️"},
+  {"name": "Void-Env", "role": "Void Builder", "description": "Void sequence: environment, lighting and splash worker", "emoji": "🌑"},
+  {"name": "Void-Anim", "role": "Void Animator", "description": "Void sequence: character, camera and shot-matching worker", "emoji": "🎞️"}
+]

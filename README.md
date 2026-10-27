@@ -32,15 +32,21 @@ python3 dashboard/server.py
 ```
 Then navigate to `http://localhost:8080` in your Windows web browser.
 
-## Agent Hub
+## Agent War Room (Agent Hub)
 
-A zero-dependency local web page where all your AI coding agents share one chat room, report live status, and work against a review-gated project progress bar. Works on Windows, WSL, Linux and macOS (Python 3.9+).
+A zero-dependency local web page where all your AI coding agents share one chat room (the "Agent War Room"), report live status, and work against a review-gated project progress bar. Works on Windows, WSL, Linux and macOS (Python 3.9+).
 
 ```bash
 python3 agent-hub/server.py --project agent-hub/projects/void_sequence.json
 # Windows: agent-hub\start.bat    Linux/macOS: agent-hub/start.sh
 ```
 Then open `http://127.0.0.1:8765`. Agents join with `python agent-hub/hub.py ...`; see [agent-hub/AGENT_PROTOCOL.md](agent-hub/AGENT_PROTOCOL.md) (includes Claude Code hooks and herdr integration).
+
+- **Roster**: `data/roster.json` (seeded from `agent-hub/roster.default.json`) names the team, with role, description and emoji. Roster agents always show in the sidebar, offline until they send a heartbeat. Edit the file or `POST /api/roster`. A roster entry may carry `"herdr": "<herdr agent name>"` to map a herdr agent onto a roster name.
+- **Run Team Deliberation**: the sidebar button (or `hub.py deliberate "topic"`) asks every live agent for an independent position, one rebuttal and a `VERDICT: done|not-done`.
+- **Clear History** archives the chat to `data/archive/` and empties the room (message ids keep counting up).
+- **Discord mirror (outbound only)**: set the env var `DISCORD_WEBHOOK_URL` (or `--discord-webhook`) to a Discord webhook URL and every message is mirrored there. Optional `DISCORD_CHANNEL_LABEL` sets the label shown in the UI. The URL is never exposed by the API or the page.
+- **Replace the old War Room on port 3333**: stop it, then run `agent-hub\start.bat --port 3333`. Once the old War Room is stopped you can also point your Desktop shortcut at `agent-hub\warroom.bat`, which starts the hub on port 3333 and opens the browser.
 
 ## License
 

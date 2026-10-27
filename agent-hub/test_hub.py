@@ -23,12 +23,21 @@ SEED = {
 }
 
 
+EMPTY_ROSTER = Path(tempfile.mkdtemp()) / "empty_roster.json"
+EMPTY_ROSTER.write_text("[]")
+
+
 class HubCase(unittest.TestCase):
+    def empty_roster(self):
+        p = Path(self.tmp.name) / "empty_roster.json"
+        p.write_text("[]")
+        return p
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         seed = Path(self.tmp.name) / "seed.json"
         seed.write_text(json.dumps(SEED))
-        self.hub = server.Hub(Path(self.tmp.name) / "data", seed)
+        self.hub = server.Hub(Path(self.tmp.name) / "data", seed, roster_seed=self.empty_roster())
         self.srv = server.make_server("127.0.0.1", 0, self.hub, ping_interval=1)
         self.port = self.srv.server_address[1]
         self.thread = threading.Thread(target=self.srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
@@ -261,7 +270,7 @@ class TestStatic(HubCase):
     def test_index_and_traversal(self):
         s, body = self.req("GET", "/")
         self.assertEqual(s, 200)
-        self.assertIn(b"Agent Hub", body)
+        self.assertIn(b"Agent War Room", body)
         for path in ("/static/../server.py", "/static/%2e%2e/server.py", "/static/..%2fserver.py"):
             c = http.client.HTTPConnection("127.0.0.1", self.port)
             c.putrequest("GET", path, skip_accept_encoding=True)
@@ -305,7 +314,7 @@ class TestHerdr(unittest.TestCase):
 
     def test_poll_with_fake_runner_and_fallbacks(self):
         with tempfile.TemporaryDirectory() as d:
-            hub = server.Hub(d, herdr_path="herdr", herdr_enabled=True)
+            hub = server.Hub(d, herdr_path="herdr", herdr_enabled=True, roster_seed=EMPTY_ROSTER)
             calls = []
 
             def fake(args, timeout=30):
@@ -324,7 +333,7 @@ class TestHerdr(unittest.TestCase):
 
     def test_targets(self):
         with tempfile.TemporaryDirectory() as d:
-            hub = server.Hub(d, herdr_path="herdr", herdr_enabled=True)
+            hub = server.Hub(d, herdr_path="herdr", herdr_enabled=True, roster_seed=EMPTY_ROSTER)
             hub.upsert_agent("alpha", state="working", source="herdr")
             hub.upsert_agent("beta", state="idle", source="herdr")
             hub.upsert_agent("hubonly", state="idle")
@@ -333,6 +342,160 @@ class TestHerdr(unittest.TestCase):
             self.assertEqual(hub.herdr_targets(m("user", "@all hi")), ["beta"])
             self.assertEqual(hub.herdr_targets(m("user", "@hubonly hi")), [])
             self.assertEqual(hub.herdr_targets(m("alpha", "@beta hi")), [])  # only user messages forward
+
+
+class TestWarRoom(HubCase):
+    def setUp(self):
+        super().setUp()
+        self.tmp2 = tempfile.TemporaryDirectory()
+        self.rhub = server.Hub(Path(self.tmp2.name) / "d")  # real default roster seed
+        self.rsrv = server.make_server("127.0.0.1", 0, self.rhub, ping_interval=1)
+        self.rport = self.rsrv.server_address[1]
+        threading.Thread(target=self.rsrv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
+
+    def tearDown(self):
+        self.rsrv.shutdown()
+        self.rsrv.server_close()
+        self.tmp2.cleanup()
+        super().tearDown()
+
+    def rreq(self, method, path, body=None):
+        c = http.client.HTTPConnection("127.0.0.1", self.rport, timeout=5)
+        c.request(method, path, json.dumps(body) if body is not None else None,
+                  {"Content-Type": "application/json"} if body is not None else {})
+        r = c.getresponse()
+        raw = r.read()
+        c.close()
+        return r.status, json.loads(raw)
+
+    def test_roster_seed_and_merge(self):
+        s, roster = self.rreq("GET", "/api/roster")
+        names = [r["name"] for r in roster]
+        for n in ("Hermes", "Claude", "Codex", "Letta", "Ari"):
+            self.assertIn(n, names)
+        self.assertTrue((Path(self.tmp2.name) / "d" / "roster.json").exists())
+        agents = self.rreq("GET", "/api/agents")[1]
+        self.assertTrue(all(a["state"] == "offline" for a in agents))
+        self.assertEqual(len(agents), len(roster))
+        self.rreq("POST", "/api/agents/heartbeat", {"name": "claude", "kind": "claude", "state": "working",
+                                                     "task": "x", "progress": 10})
+        agents = {a["name"]: a for a in self.rreq("GET", "/api/agents")[1]}
+        self.assertEqual(agents["Claude"]["state"], "working")
+        self.assertEqual(agents["Claude"]["role"], "Builder")
+        self.assertEqual(agents["Hermes"]["state"], "offline")
+        self.assertNotIn("claude", agents)
+
+    def test_roster_upsert_validation(self):
+        s, e = self.rreq("POST", "/api/roster", {"name": "Zed", "role": "R", "emoji": "Z", "herdr": "zed-1"})
+        self.assertEqual(s, 200)
+        self.assertEqual(e["herdr"], "zed-1")
+        self.rreq("POST", "/api/roster", {"name": "zed", "role": "R2"})
+        zs = [r for r in self.rreq("GET", "/api/roster")[1] if r["name"].lower() == "zed"]
+        self.assertEqual(len(zs), 1)
+        self.assertEqual(self.rreq("POST", "/api/roster", {"name": "bad name"})[0], 400)
+        self.assertEqual(self.rreq("POST", "/api/roster", {"name": "ok", "role": "x" * 500})[0], 400)
+
+    def test_roster_herdr_mapping(self):
+        hub = self.rhub
+        hub.herdr.update(enabled=True, path="herdr")
+        hub.roster_upsert({"name": "Hermes", "herdr": "pane-7"})
+        hub.upsert_agent("pane-7", kind="claude", state="idle", source="herdr")
+        agents = {a["name"]: a for a in hub.agents_view()}
+        self.assertNotIn("pane-7", agents)
+        self.assertEqual(agents["Hermes"]["state"], "idle")
+        self.assertEqual(agents["Hermes"]["herdr_name"], "pane-7")
+        m = lambda text: {"from": "user", "text": text, "to": server.parse_mentions(text)}
+        self.assertEqual(hub.herdr_targets(m("@Hermes go")), ["pane-7"])
+        self.assertEqual(hub.herdr_targets(m("@hermes go")), ["pane-7"])
+        self.assertEqual(hub.herdr_targets(m("@pane-7 go")), ["pane-7"])
+
+    def test_deliberate(self):
+        self.rreq("POST", "/api/agents/heartbeat", {"name": "Hermes", "state": "idle"})
+        self.rreq("POST", "/api/agents/heartbeat", {"name": "Codex", "state": "working"})
+        s, r = self.rreq("POST", "/api/deliberate", {"topic": "Is V03 done", "by": "user"})
+        self.assertEqual(s, 201)
+        self.assertEqual(r["participants"], ["Codex", "Hermes"])
+        self.assertEqual(r["message"]["to"], ["all"])
+        self.assertIn("Deliberation: Is V03 done.", r["message"]["text"])
+        self.assertIn("VERDICT: done|not-done", r["message"]["text"])
+        s, r = self.rreq("POST", "/api/deliberate", {"by": "user"})
+        self.assertIn("against its done definition?", r["message"]["text"])
+
+    def test_clear(self):
+        for i in range(3):
+            self.req("POST", "/api/messages", {"from": "user", "text": "@bob m%d" % i})
+        self.assertEqual(self.req("POST", "/api/clear", {"by": "user"})[0], 400)
+        self.assertEqual(self.req("POST", "/api/clear", {"by": "user", "confirm": "yes"})[0], 400)
+        self.assertEqual(len(self.req("GET", "/api/messages?since=0")[1]), 3)
+        s, r = self.req("POST", "/api/clear", {"by": "user", "confirm": True})
+        self.assertEqual(s, 200)
+        arch = self.hub.data_dir / "archive" / r["archive"]
+        self.assertEqual(len(arch.read_text().strip().splitlines()), 3)
+        self.assertEqual(self.req("GET", "/api/messages?since=0")[1], [])
+        s, m = self.req("POST", "/api/messages", {"from": "user", "text": "@bob after"})
+        self.assertEqual(m["id"], 4)
+        self.assertEqual([x["id"] for x in self.req("GET", "/api/inbox?for=bob&ack=1")[1]], [4])
+        self.req("POST", "/api/clear", {"by": "user", "confirm": True})
+        self.assertEqual(server.Hub(self.hub.data_dir).next_id, 5)
+
+    def test_discord_pure(self):
+        p = server.discord_payload("Hermes", "Orchestrator", "x" * 3000)
+        self.assertEqual(p["username"], "Hermes | Orchestrator")
+        self.assertEqual(len(p["content"]), 1900)
+        self.assertEqual(p["allowed_mentions"], {"parse": []})
+        self.assertEqual(server.discord_payload("bob", "", "hi")["username"], "bob")
+        self.assertEqual(len(server.discord_payload("n" * 64, "r" * 80, "x")["username"]), 80)
+        self.assertTrue(server.valid_discord_url("https://discord.com/api/webhooks/123/abc"))
+        self.assertTrue(server.valid_discord_url("https://discordapp.com/api/webhooks/1/a"))
+        for bad in ("http://discord.com/api/webhooks/1/a", "https://evil.com/api/webhooks/1/a",
+                    "https://discord.com/api/webhooks/", "", None, "https://discord.com.evil.com/x"):
+            self.assertFalse(server.valid_discord_url(bad), bad)
+
+    def test_discord_mirror_and_no_leak(self):
+        import time as _t
+        url = "https://discord.com/api/webhooks/999/SECRETTOKEN"
+        sent = []
+        hub = server.Hub(Path(self.tmp2.name) / "dd", discord_url=url, discord_label="#war-room",
+                         discord_sender=lambda u, p: (sent.append((u, p)) or (204, None, None)))
+        srv = server.make_server("127.0.0.1", 0, hub, ping_interval=1)
+        port = srv.server_address[1]
+        threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
+        try:
+            hub.add_message("Claude", "hello")
+            hub.add_message("discord", "from discord")
+            for _ in range(100):
+                if sent:
+                    break
+                _t.sleep(0.02)
+            _t.sleep(0.1)
+            self.assertEqual(len(sent), 1)
+            self.assertEqual(sent[0][0], url)
+            self.assertEqual(sent[0][1]["username"], "Claude | Builder")
+            blob = b""
+            for path in ("/api/health", "/api/config", "/api/agents", "/api/roster", "/api/messages?since=0",
+                         "/api/project", "/"):
+                c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                c.request("GET", path)
+                blob += c.getresponse().read()
+                c.close()
+            self.assertNotIn(b"SECRETTOKEN", blob)
+            self.assertNotIn(b"api/webhooks", blob)
+            self.assertEqual(hub.config()["discord"], {"enabled": True, "label": "war-room"})
+            self.assertEqual(hub.health()["discord"]["sent"], 1)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_discord_invalid_url_disabled(self):
+        hub = server.Hub(Path(self.tmp2.name) / "d3", discord_url="https://evil.example/x")
+        self.assertFalse(hub.discord["enabled"])
+        self.assertNotIn("evil", json.dumps(hub.health()))
+
+    def test_config(self):
+        s, c = self.req("GET", "/api/config")
+        self.assertEqual(c["title"], "Agent War Room")
+        self.assertFalse(c["discord"]["enabled"])
+        self.assertFalse(c["herdr"]["enabled"])
 
 
 if __name__ == "__main__":

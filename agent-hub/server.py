@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Agent Hub: a local chat room, agent status board and review-gated project tracker.
+"""Agent War Room (Agent Hub): a local chat room, agent status board and review-gated project tracker.
 
 Python 3.9+ standard library only. Binds to 127.0.0.1 by default.
 """
@@ -21,6 +21,8 @@ import mimetypes
 import os
 import random
 import uuid
+import urllib.error
+import urllib.request
 
 HERE = Path(__file__).resolve().parent
 STATIC_DIR = HERE / "static"
@@ -31,6 +33,12 @@ STATUSES = ("todo", "doing", "review", "done", "blocked")
 OFFLINE_AFTER_S = 600
 MAX_TEXT = 8000
 MAX_BODY = 1024 * 1024
+ROSTER_SEED = HERE / "roster.default.json"
+APP_TITLE = "Agent War Room"
+DISCORD_PREFIXES = ("https://discord.com/api/webhooks/", "https://discordapp.com/api/webhooks/")
+DEFAULT_TOPIC = "What is done and what is not done on the current mission, against its done definition?"
+DELIBERATE_SUFFIX = (" Each agent: reply independently with your position BEFORE reading others; "
+                     "then one rebuttal; end with VERDICT: done|not-done and why.")
 
 
 def now_utc():
@@ -62,6 +70,37 @@ def parse_mentions(text):
         if m not in out:
             out.append(m)
     return out or ["all"]
+
+
+def valid_discord_url(url):
+    url = str(url or "").strip()
+    return url.startswith(DISCORD_PREFIXES) and len(url) > len(DISCORD_PREFIXES[0]) and " " not in url
+
+
+def discord_payload(frm, role, text):
+    """Build the outbound Discord webhook body. Mentions are always neutralised."""
+    name = "%s | %s" % (frm, role) if role else str(frm)
+    return {"username": name[:80], "content": str(text)[:1900], "allowed_mentions": {"parse": []}}
+
+
+def default_discord_send(url, payload, timeout=5):
+    """POST to the webhook. Returns (status, retry_after_seconds_or_None, error_or_None). Never raises."""
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST", headers={
+        "Content-Type": "application/json", "User-Agent": "AgentWarRoom/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, None, None
+    except urllib.error.HTTPError as e:
+        retry = None
+        if e.code == 429:
+            try:
+                retry = float(json.loads(e.read().decode("utf-8")).get("retry_after", 1))
+            except Exception:
+                retry = 1.0
+        return e.code, retry, "HTTP %d" % e.code
+    except Exception as e:  # message deliberately excludes the URL
+        return 0, None, type(e).__name__
 
 
 class ApiError(Exception):
@@ -146,7 +185,8 @@ def read_json(path, default):
 
 
 class Hub:
-    def __init__(self, data_dir, project_seed=None, herdr_path=None, herdr_enabled=False):
+    def __init__(self, data_dir, project_seed=None, herdr_path=None, herdr_enabled=False,
+                 roster_seed=None, discord_url=None, discord_label=None, discord_sender=None):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
@@ -166,7 +206,32 @@ class Hub:
                             self.messages.append(json.loads(line))
                         except ValueError:
                             pass
+        self.meta_path = self.data_dir / "meta.json"
         self.next_id = (max([m["id"] for m in self.messages]) + 1) if self.messages else 1
+        try:  # ids stay monotonic across clears and restarts
+            self.next_id = max(self.next_id, int(read_json(self.meta_path, {}).get("next_id", 1)))
+        except (TypeError, ValueError):
+            pass
+        self.roster_path = self.data_dir / "roster.json"
+        if not self.roster_path.exists():
+            try:
+                shutil.copyfile(roster_seed or ROSTER_SEED, self.roster_path)
+            except OSError as e:
+                print("could not seed roster: %s" % e, file=sys.stderr)
+        self.roster = [r for r in (self.clean_roster_entry(x) for x in read_json(self.roster_path, [])
+                                   if isinstance(x, dict)) if r]
+        self.discord = {"enabled": False, "label": (discord_label or "discord").lstrip("#")[:60] or "discord",
+                        "last_error": None, "sent": 0}
+        self._discord_url = None
+        self._discord_send = discord_sender or default_discord_send
+        self._discord_q = queue.Queue(maxsize=200)
+        if discord_url:
+            if valid_discord_url(discord_url):
+                self._discord_url = discord_url.strip()
+                self.discord["enabled"] = True
+                threading.Thread(target=self._discord_loop, daemon=True).start()
+            else:
+                self.discord["last_error"] = "webhook URL rejected (must start with https://discord.com/api/webhooks/)"
         self.agents = read_json(self.agents_path, {})
         self.cursors = read_json(self.cursors_path, {})
         if not self.project_path.exists() and project_seed:
@@ -216,6 +281,7 @@ class Hub:
             self.messages.append(msg)
             self.msg_cond.notify_all()
         self.broadcast("message", msg)
+        self.discord_enqueue(msg)
         return msg
 
     @staticmethod
@@ -282,9 +348,158 @@ class Hub:
             a["state"] = "offline"
         return a
 
+    # ---- roster
+    @staticmethod
+    def clean_roster_entry(x):
+        name = str(x.get("name") or "").strip()
+        if not NAME_RE.match(name):
+            return None
+        herdr = str(x.get("herdr") or "").strip()
+        out = {"name": name, "role": str(x.get("role") or "").strip()[:80],
+               "description": str(x.get("description") or "").strip()[:200],
+               "emoji": str(x.get("emoji") or "").strip()[:8]}
+        if herdr and NAME_RE.match(herdr):
+            out["herdr"] = herdr
+        return out
+
+    def roster_find(self, name):
+        n = str(name or "").lower()
+        with self.lock:
+            return next((r for r in self.roster if r["name"].lower() == n), None)
+
+    def roster_for_herdr(self, herdr_name):
+        n = str(herdr_name or "").lower()
+        with self.lock:
+            return next((r for r in self.roster if r.get("herdr", "").lower() == n), None)
+
+    def roster_upsert(self, body):
+        name = str(body.get("name") or "").strip()
+        if not NAME_RE.match(name):
+            raise ApiError(400, "invalid name (use letters, digits, _ . -; max 64)")
+        for k, cap in (("role", 80), ("description", 200), ("emoji", 8)):
+            if k in body and len(str(body.get(k) or "")) > cap:
+                raise ApiError(400, "%s too long (max %d)" % (k, cap))
+        if body.get("herdr") and not NAME_RE.match(str(body["herdr"]).strip()):
+            raise ApiError(400, "invalid herdr name")
+        with self.lock:
+            cur = self.roster_find(name)
+            merged = dict(cur or {"name": name})
+            for k in ("role", "description", "emoji", "herdr"):
+                if k in body:
+                    merged[k] = body[k]
+            entry = self.clean_roster_entry(merged)
+            if cur:
+                self.roster[self.roster.index(cur)] = entry
+            else:
+                if len(self.roster) >= 100:
+                    raise ApiError(400, "roster full (max 100)")
+                self.roster.append(entry)
+            write_json_atomic(self.roster_path, self.roster)
+        self.broadcast("agents", self.agents_view())
+        return entry
+
     def agents_view(self):
         with self.lock:
-            return sorted((self.view_agent(a) for a in self.agents.values()), key=lambda a: a["name"].lower())
+            out = {}
+            for a in self.agents.values():
+                v = self.view_agent(a)
+                r = self.roster_find(v["name"])
+                if not r and v.get("source") == "herdr":
+                    r = self.roster_for_herdr(v["name"])
+                    if r:
+                        v["herdr_name"] = v["name"]
+                        v["name"] = r["name"]
+                if r:
+                    v["name"] = r["name"]
+                    v["role"], v["description"], v["emoji"] = r["role"], r["description"], r["emoji"]
+                else:
+                    v.setdefault("role", "")
+                    v.setdefault("description", "")
+                    v.setdefault("emoji", "")
+                key = v["name"].lower()
+                prev = out.get(key)
+                if prev is None or (prev["state"] == "offline" and v["state"] != "offline") or (
+                        (prev["state"] == "offline") == (v["state"] == "offline")
+                        and v.get("last_seen", "") > prev.get("last_seen", "")):
+                    out[key] = v
+            for r in self.roster:
+                if r["name"].lower() not in out:
+                    out[r["name"].lower()] = {"name": r["name"], "kind": "roster", "state": "offline", "task": "",
+                                              "progress": 0, "source": "roster", "role": r["role"],
+                                              "description": r["description"], "emoji": r["emoji"]}
+            return sorted(out.values(), key=lambda a: a["name"].lower())
+
+    def live_agents(self):
+        return [a["name"] for a in self.agents_view()
+                if a["state"] != "offline" and a["name"].lower() not in ("user", "hub")]
+
+    # ---- deliberation / clear
+    def deliberate(self, topic, by="user"):
+        if not NAME_RE.match(str(by or "")):
+            raise ApiError(400, "invalid 'by'")
+        topic = str(topic or "").strip()
+        if not topic:
+            topic = DEFAULT_TOPIC
+            dd = str(self.project.get("done_definition") or "").strip()
+            if dd:
+                topic += " Done definition: " + dd
+        topic = topic[:3000]
+        if topic[-1] not in ".?!":
+            topic += "."
+        participants = self.live_agents()
+        msg = self.add_message(by, "@all Deliberation: " + topic + DELIBERATE_SUFFIX)
+        return msg, participants
+
+    def clear_history(self):
+        with self.lock:
+            archived = None
+            if self.messages_path.exists() and self.messages_path.stat().st_size:
+                adir = self.data_dir / "archive"
+                adir.mkdir(exist_ok=True)
+                archived = adir / ("messages-%s.jsonl" % now_utc().strftime("%Y%m%dT%H%M%S%fZ"))
+                shutil.copyfile(self.messages_path, archived)
+            write_json_atomic(self.meta_path, {"next_id": self.next_id})
+            with open(self.messages_path, "w", encoding="utf-8"):
+                pass
+            count = len(self.messages)
+            self.messages = []
+            self.msg_cond.notify_all()
+        self.broadcast("cleared", {"count": count, "ts": iso()})
+        return {"cleared": count, "archive": archived.name if archived else None}
+
+    # ---- discord mirror (outbound only)
+    def discord_enqueue(self, msg):
+        if not self.discord["enabled"] or str(msg["from"]).lower().startswith("discord"):
+            return
+        r = self.roster_find(msg["from"]) or self.roster_for_herdr(msg["from"])
+        payload = discord_payload(r["name"] if r else msg["from"], r["role"] if r else "", msg["text"])
+        try:
+            self._discord_q.put_nowait(payload)
+        except queue.Full:
+            self.discord["last_error"] = "queue full; message dropped"
+
+    def _discord_loop(self):
+        while True:
+            payload = self._discord_q.get()
+            try:
+                for _ in range(3):
+                    status, retry, err = self._discord_send(self._discord_url, payload)
+                    if status == 429 and retry is not None:
+                        time.sleep(min(max(retry, 0.1), 30))
+                        continue
+                    if 200 <= status < 300:
+                        self.discord["sent"] += 1
+                        self.discord["last_error"] = None
+                    else:
+                        self.discord["last_error"] = err or ("HTTP %s" % status)
+                    break
+            except Exception as e:
+                self.discord["last_error"] = type(e).__name__
+
+    def config(self):
+        return {"title": APP_TITLE,
+                "discord": {"enabled": self.discord["enabled"], "label": self.discord["label"]},
+                "herdr": {"enabled": bool(self.herdr.get("enabled"))}}
 
     # ---- project
     def save_project(self):
@@ -439,6 +654,7 @@ class Hub:
     def health(self):
         with self.lock:
             return {"ok": True, "herdr": dict(self.herdr),
+                    "discord": {k: self.discord[k] for k in ("enabled", "label", "last_error", "sent")},
                     "counts": {"messages": len(self.messages), "agents": len(self.agents),
                                "tasks": len(self.project.get("tasks", []))}}
 
@@ -507,6 +723,11 @@ class Hub:
                 for k in herdr_agents:
                     if k.lower() == m.lower():
                         want.add(k)
+                r = self.roster_find(m)
+                if r and r.get("herdr"):
+                    for k in herdr_agents:
+                        if k.lower() == r["herdr"].lower():
+                            want.add(k)
         return sorted(k for k in want if not k.startswith("-"))
 
     def forward_to_herdr(self, msg):
@@ -665,6 +886,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(hub.inbox(name, q.get("ack") == "1", q.get("all") == "1"))
         if path == "/api/agents":
             return self.send_json(hub.agents_view())
+        if path == "/api/roster":
+            return self.send_json(list(hub.roster))
+        if path == "/api/config":
+            return self.send_json(hub.config())
         if path == "/api/project":
             return self.send_json(hub.project_view())
         if path == "/api/health":
@@ -679,6 +904,18 @@ class Handler(BaseHTTPRequestHandler):
             msg = hub.add_message(body.get("from"), body.get("text"))
             hub.forward_to_herdr(msg)
             return self.send_json(msg, 201)
+        if path == "/api/roster":
+            return self.send_json(hub.roster_upsert(body))
+        if path == "/api/deliberate":
+            msg, parts = hub.deliberate(body.get("topic"), body.get("by") or "user")
+            hub.forward_to_herdr(msg)
+            return self.send_json({"message": msg, "participants": parts}, 201)
+        if path == "/api/clear":
+            if body.get("confirm") is not True:
+                raise ApiError(400, "clearing history needs {\"confirm\": true}")
+            if not NAME_RE.match(str(body.get("by") or "")):
+                raise ApiError(400, "'by' is required")
+            return self.send_json(hub.clear_history())
         if path == "/api/agents/heartbeat":
             return self.send_json(hub.upsert_agent(body.get("name"), body.get("kind"), body.get("state"),
                                                    body.get("task"), body.get("progress")))
@@ -748,6 +985,8 @@ def main(argv=None):
     ap.add_argument("--herdr", default=None, help="path to the herdr executable")
     ap.add_argument("--no-herdr", action="store_true")
     ap.add_argument("--project", default=None, help="seed project JSON (used only if data/project.json is absent)")
+    ap.add_argument("--discord-webhook", default=None,
+                    help="Discord webhook URL for the outbound mirror (or env DISCORD_WEBHOOK_URL)")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--open", action="store_true", help="open the page in a browser once listening")
     args = ap.parse_args(argv)
@@ -760,13 +999,18 @@ def main(argv=None):
             print("WARNING: herdr resolves to a .cmd/.bat shim (%s); herdr bridge disabled. "
                   "Pass --herdr with the real herdr.exe path." % herdr_path)
             herdr_path = None
-    hub = Hub(args.data_dir, args.project, herdr_path, bool(herdr_path))
+    webhook = args.discord_webhook or os.environ.get("DISCORD_WEBHOOK_URL")
+    if webhook and not valid_discord_url(webhook):
+        print("WARNING: Discord webhook ignored: it must start with https://discord.com/api/webhooks/")
+    hub = Hub(args.data_dir, args.project, herdr_path, bool(herdr_path), discord_url=webhook,
+              discord_label=os.environ.get("DISCORD_CHANNEL_LABEL"))
     if herdr_path:
         threading.Thread(target=hub.herdr_loop, daemon=True).start()
     srv = make_server(args.host, args.port, hub)
     srv.verbose = args.verbose
-    print("Agent Hub on http://%s:%d  (data: %s, herdr: %s)" % (
-        args.host, srv.server_address[1], args.data_dir, herdr_path or "off"))
+    print("Agent War Room on http://%s:%d  (data: %s, herdr: %s, discord: %s)" % (
+        args.host, srv.server_address[1], args.data_dir, herdr_path or "off",
+        "on" if hub.discord["enabled"] else "off"))
     if args.open:
         import webbrowser
         host = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host

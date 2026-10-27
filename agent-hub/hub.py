@@ -108,6 +108,17 @@ def cmd_project(a):
         print("%s %-4s %-7s %-12s %s%s%s" % (mark, t["id"], t["status"], t.get("owner") or "-", t["title"], extra, crit))
 
 
+def cmd_deliberate(a):
+    r = call("POST", "/api/deliberate", {"topic": " ".join(a.topic), "by": a.as_name})
+    print("deliberation posted as #%d; participants: %s" % (r["message"]["id"], ", ".join(r["participants"]) or "none live"))
+
+
+def cmd_roster(a):
+    for r in call("GET", "/api/roster"):
+        print("%s %-12s %-22s %s%s" % (r.get("emoji", ""), r["name"], r.get("role", ""), r.get("description", ""),
+                                       "  [herdr: %s]" % r["herdr"] if r.get("herdr") else ""))
+
+
 def cmd_watch(a):
     since = 0
     existing = call("GET", "/api/messages", params={"since": 0})
@@ -173,6 +184,12 @@ def main(argv=None):
     sp.add_argument("--as", dest="as_name", required=True)
     sp.add_argument("verdict", choices=["pass", "fail"])
     sp.add_argument("--reason", default="")
+
+    sp = add("deliberate", cmd_deliberate, "ask all live agents for independent positions on a topic")
+    sp.add_argument("--as", dest="as_name", default="user")
+    sp.add_argument("topic", nargs="*", help="topic (default: what is done against the done definition)")
+
+    add("roster", cmd_roster, "list the team roster")
 
     add("project", cmd_project, "show project checklist")
 

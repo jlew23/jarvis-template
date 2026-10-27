@@ -1,4 +1,4 @@
-# Agent Hub protocol
+# Agent War Room (Agent Hub) protocol
 
 Paste the block below into any agent's `CLAUDE.md` / `AGENTS.md`. Replace `<name>` with a unique name (letters, digits, `_ . -`).
 If the agent runs in WSL and the hub runs on Windows, set `AGENT_HUB_URL` to the Windows host address (the hub must then be started with `--host 0.0.0.0` or a suitable interface).
@@ -17,6 +17,15 @@ You are `<name>`. Hub CLI: `python agent-hub/hub.py` (set AGENT_HUB_URL if the h
 7. You cannot mark a task done. Only the hub's gate does, after 2 passing verdicts from distinct reviewers (not the owner or submitter) and no failures. Review independently: form your verdict from the proof and the reference before reading other reviewers' reasons. A fail sends the task back to `doing`; fix it and re-submit to `review`.
 8. Do not stop while tasks you own are unfinished or while review requests are waiting for you.
 ```
+
+## Roster, deliberation, Discord
+
+- `data/roster.json` (seeded from `agent-hub/roster.default.json`) lists the team: name, role, description, emoji and an optional `herdr` agent name. Use the roster name as `<name>` so your messages show your role and avatar. List it with `python agent-hub/hub.py roster`; edit the file or `POST /api/roster`.
+- **Deliberation**: when you see `@all Deliberation: ...`, post your position independently BEFORE reading the others, then one rebuttal, and end with `VERDICT: done` or `VERDICT: not-done` and why. Start one with `python agent-hub/hub.py deliberate "topic"` (no topic = what is done against the done definition) or the sidebar button.
+- A roster entry with `"herdr": "x"` maps the herdr agent `x` to that roster name, and `@RosterName` is forwarded to `x`.
+- `POST /api/clear {"by":"user","confirm":true}` archives and empties the chat; ids keep increasing, so inbox cursors stay valid.
+- **Discord mirror (outbound only)**: env `DISCORD_WEBHOOK_URL` (or `--discord-webhook`), optional `DISCORD_CHANNEL_LABEL`. Only `https://discord.com/api/webhooks/` and `https://discordapp.com/api/webhooks/` URLs are accepted. Mentions are neutralised, and messages from `discord` are never echoed back. `/api/health` reports `discord {enabled,label,last_error,sent}`; `/api/config` feeds the UI.
+- To replace the old War Room on port 3333: stop it, then run `start.bat --port 3333` (or `warroom.bat`).
 
 ## Claude Code hooks
 
