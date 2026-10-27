@@ -1,3 +1,5 @@
 @echo off
-start "" cmd /c "timeout /t 2 >nul & start http://127.0.0.1:8765"
-python "%~dp0server.py" --project "%~dp0projects\void_sequence.json" %*
+rem Starts the Agent Hub and opens it in your browser. Extra args (e.g. --port 9000) pass through.
+set "PY=python"
+where py >nul 2>nul && set "PY=py -3"
+%PY% "%~dp0server.py" --open --project "%~dp0projects\void_sequence.json" %*

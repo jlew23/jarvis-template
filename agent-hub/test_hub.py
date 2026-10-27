@@ -151,6 +151,32 @@ class TestGate(HubCase):
         s, _ = self.req("POST", "/api/project/verdict", {"id": "A", "by": "alice", "verdict": "pass", "reason": "me"})
         self.assertEqual(s, 403)
 
+    def test_invalid_owner_does_not_mutate(self):
+        self.req("POST", "/api/project/task", {"id": "A", "by": "alice", "status": "doing"})
+        self.submit("A", owner="sam")
+        s, _ = self.req("POST", "/api/project/task", {"id": "A", "by": "sam", "status": "doing", "owner": "x y"})
+        self.assertEqual(s, 400)
+        t = self.task("A")
+        self.assertEqual((t["owner"], t["status"]), ("alice", "review"))
+
+    def test_lone_surrogate_rejected_and_state_survives(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("POST", "/api/agents/heartbeat", b'{"name":"z","task":"\\ud800"}',
+                  {"Content-Type": "application/json"})
+        self.assertEqual(c.getresponse().status, 400)
+        c.close()
+        self.assertEqual(self.req("GET", "/api/agents")[0], 200)
+        self.assertEqual(self.req("POST", "/api/agents/heartbeat", {"name": "y"})[0], 200)
+
+    def test_negative_content_length(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
+        c.putrequest("POST", "/api/messages")
+        c.putheader("Content-Type", "application/json")
+        c.putheader("Content-Length", "-1")
+        c.endheaders()
+        self.assertEqual(c.getresponse().status, 400)
+        c.close()
+
     def test_review_requires_proof(self):
         s, _ = self.req("POST", "/api/project/task", {"id": "A", "by": "alice", "status": "review"})
         self.assertEqual(s, 400)

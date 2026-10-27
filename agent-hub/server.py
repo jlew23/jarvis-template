@@ -121,11 +121,20 @@ def parse_herdr_agents(obj):
 
 # ---------------------------------------------------------------- hub state
 
+MIME_TYPES = {".html": "text/html", ".css": "text/css", ".js": "application/javascript",
+              ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png",
+              ".ico": "image/x-icon", ".txt": "text/plain"}
+
+
 def write_json_atomic(path, obj):
     tmp = path.with_name(path.name + ".%s.tmp" % uuid.uuid4().hex[:8])
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(obj, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 
 def read_json(path, default):
@@ -257,7 +266,7 @@ class Hub:
             if progress is not None:
                 try:
                     a["progress"] = max(0, min(100, int(float(progress))))
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     raise ApiError(400, "progress must be a number 0-100")
             a["last_seen"] = iso()
             self.agents[key] = a
@@ -334,6 +343,8 @@ class Hub:
     def update_task(self, tid, by, status=None, owner="__unset__", note=None, proof=None):
         if not NAME_RE.match(str(by or "")):
             raise ApiError(400, "'by' is required")
+        if owner not in ("__unset__", None) and str(owner).strip() and not NAME_RE.match(str(owner).strip()):
+            raise ApiError(400, "invalid owner")
         events = []
         with self.lock:
             t = self.find_task(tid)
@@ -356,8 +367,6 @@ class Hub:
                                     "move it back to 'doing' first")
             if owner != "__unset__":
                 t["owner"] = (str(owner).strip() or None) if owner is not None else None
-                if t["owner"] and not NAME_RE.match(t["owner"]):
-                    raise ApiError(400, "invalid owner")
             if status is not None and status != t["status"]:
                 cur = t["rounds"][-1] if t.get("rounds") else None
                 if t["status"] == "review" and cur and not cur.get("closed"):
@@ -561,6 +570,9 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             self.close_connection = True
             raise ApiError(400, "bad Content-Length")
+        if n < 0:
+            self.close_connection = True
+            raise ApiError(400, "bad Content-Length")
         if n > MAX_BODY:
             self.close_connection = True
             raise ApiError(413, "body too large")
@@ -574,6 +586,10 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(400, "invalid JSON")
         if not isinstance(obj, dict):
             raise ApiError(400, "JSON body must be an object")
+        try:  # reject lone surrogates etc. before they reach state and break every later save
+            json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        except (UnicodeEncodeError, ValueError):
+            raise ApiError(400, "body contains invalid unicode")
         return obj
 
     def dispatch(self, method):
@@ -619,7 +635,7 @@ class Handler(BaseHTTPRequestHandler):
         if "\x00" in rel or not target.is_file():
             raise ApiError(404, "not found")
         data = target.read_bytes()
-        ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        ctype = MIME_TYPES.get(target.suffix.lower(), "application/octet-stream")
         if ctype.startswith("text/") or ctype in ("application/javascript", "application/json"):
             ctype += "; charset=utf-8"
         self.send_response(200)
@@ -733,18 +749,28 @@ def main(argv=None):
     ap.add_argument("--no-herdr", action="store_true")
     ap.add_argument("--project", default=None, help="seed project JSON (used only if data/project.json is absent)")
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--open", action="store_true", help="open the page in a browser once listening")
     args = ap.parse_args(argv)
 
     herdr_path = None
     if not args.no_herdr:
         herdr_path = args.herdr or shutil.which("herdr")
+        if herdr_path and Path(herdr_path).suffix.lower() in (".cmd", ".bat"):
+            # cmd.exe re-parses argv for .cmd/.bat, so chat text could inject commands
+            print("WARNING: herdr resolves to a .cmd/.bat shim (%s); herdr bridge disabled. "
+                  "Pass --herdr with the real herdr.exe path." % herdr_path)
+            herdr_path = None
     hub = Hub(args.data_dir, args.project, herdr_path, bool(herdr_path))
     if herdr_path:
         threading.Thread(target=hub.herdr_loop, daemon=True).start()
     srv = make_server(args.host, args.port, hub)
     srv.verbose = args.verbose
     print("Agent Hub on http://%s:%d  (data: %s, herdr: %s)" % (
-        args.host, args.port, args.data_dir, herdr_path or "off"))
+        args.host, srv.server_address[1], args.data_dir, herdr_path or "off"))
+    if args.open:
+        import webbrowser
+        host = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
+        threading.Timer(0.5, webbrowser.open, ["http://%s:%d/" % (host, srv.server_address[1])]).start()
     if args.host not in ("127.0.0.1", "localhost", "::1"):
         print("WARNING: bound to a non-loopback address; anyone on your network can use this hub.")
     try:

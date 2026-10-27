@@ -125,17 +125,18 @@ def cmd_watch(a):
             if msgs:
                 since = msgs[-1]["id"]
             else:
-                # no addressed messages; still advance past unrelated ones
-                latest = call("GET", "/api/messages", params={"since": since})
-                if latest:
-                    since = latest[-1]["id"]
-                else:
-                    time.sleep(0.2)
+                time.sleep(0.2)
     except KeyboardInterrupt:
         pass
 
 
 def main(argv=None):
+    # inbox acks before printing, so never let a console codec (cp1252/cp437) drop messages
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     ap = argparse.ArgumentParser(description="Agent Hub client")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
