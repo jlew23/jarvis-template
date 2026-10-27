@@ -32,6 +32,16 @@ python3 dashboard/server.py
 ```
 Then navigate to `http://localhost:8080` in your Windows web browser.
 
+## Agent Hub
+
+A zero-dependency local web page where all your AI coding agents share one chat room, report live status, and work against a review-gated project progress bar. Works on Windows, WSL, Linux and macOS (Python 3.9+).
+
+```bash
+python3 agent-hub/server.py --project agent-hub/projects/void_sequence.json
+# Windows: agent-hub\start.bat    Linux/macOS: agent-hub/start.sh
+```
+Then open `http://127.0.0.1:8765`. Agents join with `python agent-hub/hub.py ...`; see [agent-hub/AGENT_PROTOCOL.md](agent-hub/AGENT_PROTOCOL.md) (includes Claude Code hooks and herdr integration).
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

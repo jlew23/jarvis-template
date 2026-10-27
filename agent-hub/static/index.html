@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Hub</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top panel">
+  <div class="top-row">
+    <h1 id="ptitle">Agent Hub</h1>
+    <span id="complete" class="badge" hidden>COMPLETE</span>
+    <span id="conn" class="conn">connecting</span>
+    <span id="pct" class="pct">0%</span>
+  </div>
+  <div class="bar big"><div id="bar-partial" class="fill partial"></div><div id="bar-done" class="fill done"></div></div>
+  <div class="bar thin" title="done + review at half weight"><div id="bar-partial2" class="fill partial"></div></div>
+  <div id="ptext" class="muted small"></div>
+</header>
+
+<main class="cols">
+  <section class="panel col" aria-label="Agents">
+    <h2>Agents</h2>
+    <ul id="agents" class="agents"></ul>
+  </section>
+
+  <section class="panel col chat" aria-label="Chat room">
+    <h2>Room</h2>
+    <div id="log" class="log" aria-live="polite"></div>
+    <div class="compose">
+      <div id="ac" class="ac" hidden></div>
+      <input id="input" type="text" autocomplete="off" maxlength="8000" placeholder="Message agents. Use @name or @all. Enter to send.">
+      <button id="send" type="button">Send</button>
+    </div>
+  </section>
+
+  <section class="panel col" aria-label="Tasks">
+    <h2>Tasks</h2>
+    <ul id="tasks" class="tasks"></ul>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

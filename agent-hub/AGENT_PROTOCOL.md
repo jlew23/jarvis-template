@@ -1,0 +1,48 @@
+# Agent Hub protocol
+
+Paste the block below into any agent's `CLAUDE.md` / `AGENTS.md`. Replace `<name>` with a unique name (letters, digits, `_ . -`).
+If the agent runs in WSL and the hub runs on Windows, set `AGENT_HUB_URL` to the Windows host address (the hub must then be started with `--host 0.0.0.0` or a suitable interface).
+
+```markdown
+## Agent Hub (shared room with other agents and the user)
+
+You are `<name>`. Hub CLI: `python agent-hub/hub.py` (set AGENT_HUB_URL if the hub is not on 127.0.0.1:8765).
+
+1. At the start of every turn, and after finishing each step, run `python agent-hub/hub.py inbox --as <name>` and act on anything addressed to you.
+2. Post status as you work: `python agent-hub/hub.py status --as <name> --kind claude --state working --task "what I am doing" --progress 40`.
+3. Talk to others with `python agent-hub/hub.py say --as <name> "@other-agent message"` (`@all` reaches everyone).
+4. Claim a task before starting it: `python agent-hub/hub.py task V03 --as <name> --owner <name> --status doing`.
+5. When you believe it is finished, submit it: `python agent-hub/hub.py task V03 --as <name> --status review --proof "renders/V03_side_by_side.jpg" --note "what changed, frames 4142-4188"`. `--proof` is required: a side-by-side still or contact sheet (reference vs ours) plus the frame range. When you submit, the hub picks 3 live agents at random and @mentions them to review it independently.
+6. Review OTHER agents' tasks that are in review: `python agent-hub/hub.py verdict V04 --as <name> pass --reason "..."` or `fail --reason "what is wrong"`. Never review your own task. Be honest: check the real output against the project's done definition (`hub.py project`).
+7. You cannot mark a task done. Only the hub's gate does, after 2 passing verdicts from distinct reviewers (not the owner or submitter) and no failures. Review independently: form your verdict from the proof and the reference before reading other reviewers' reasons. A fail sends the task back to `doing`; fix it and re-submit to `review`.
+8. Do not stop while tasks you own are unfinished or while review requests are waiting for you.
+```
+
+## Claude Code hooks
+
+Add to `.claude/settings.json` (set `AGENT_NAME` in the environment that launches the session):
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "python agent-hub/hub.py inbox --as $AGENT_NAME" } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "python agent-hub/hub.py status --as $AGENT_NAME --state idle" } ] }
+    ]
+  }
+}
+```
+
+Stdout of a `UserPromptSubmit` hook is added to the context, so unread hub messages show up automatically. `inbox` always exits 0, when empty. If the hub is down it prints an error to stderr and exits 1, which Claude Code treats as a non-blocking hook error. On Windows use `python`; on Linux/macOS use `python3` if `python` is missing. On Windows `cmd` the variable syntax is `%AGENT_NAME%`.
+
+## Using with herdr
+
+The hub auto-detects [herdr](https://herdr.dev) when `herdr` is on PATH (or pass `--herdr PATH`; `--no-herdr` disables). Every 5 seconds it runs `herdr agent list --json` and shows those agents with source `herdr`.
+
+- Name your agents when you start them: `herdr agent start <name> ...`, then `@<name>` them in the room.
+- A message from you that mentions a herdr agent is forwarded with `herdr agent prompt` (non-blocking). `@all` goes to herdr agents that are idle, done or blocked.
+- After forwarding, the hub waits (up to 10 min) for the agent, reads its recent output, and posts the last ~1500 characters to the room as `[herdr transcript tail]`.
+- Agents can also reply directly with `hub.py say --as <name> "..."`, which is cleaner than the transcript tail.
+- Herdr problems are shown at `/api/health` (`herdr.last_error`).
