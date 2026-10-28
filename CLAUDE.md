@@ -78,7 +78,7 @@ jarvis/
 
 ### Team Chat
 
-TEAM CHAT: The War Room hub at 127.0.0.1:8765 is how we talk. At session start, read the last 20 hub messages. Post a one-line status to the hub when you start a task, hit a blocker, make a decision, or finish (python agent-hub/hub.py say --as <your name> "..."). Check the hub for @all or @<your name> messages between tasks. Don't wait for Luda to relay messages between agents.
+TEAM CHAT: The War Room hub at 127.0.0.1:8765 is how we talk. At session start, read the last 20 hub messages. Post a one-line status to the hub when you start a task, hit a blocker, make a decision, or finish (python "D:\Users\Luda\Documents\jarvis-galaxy\jarvis-galaxy\agent-hub\hub.py" say --as <your name> "..."). Check the hub for @all or @<your name> messages between tasks. Don't wait for Luda to relay messages between agents.
 
 ### Slash Commands
 
