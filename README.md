@@ -19,7 +19,7 @@ This repository provides a comprehensive local architecture for tracking state, 
    ```bash
    git clone https://github.com/yourusername/jarvis.git ~/jarvis
    ```
-3. Install the underlying AI CLI tool (e.g., [Aider](https://aider.chat/)) and ensure [Ollama](https://ollama.com/) is installed and configured on your Windows host (e.g., `ollama pull qwen2.5-coder:14b`).
+3. Install the underlying AI CLI tool (e.g., [Aider](https://aider.chat/)) and ensure [Ollama](https://ollama.com/) is installed and configured on your Windows host (e.g., `ollama pull qwen3.5:4b`).
 4. See the [Windows-to-WSL Bridge Documentation](docs/windows-wsl-bridge.md) for instructions on setting up global access from Windows.
 
 ## Usage

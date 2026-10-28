@@ -10,16 +10,16 @@ The `jarvis.bat` bridge automates this complex handoff:
 1. **Ollama Check:** It checks if the `ollama app.exe` process is running on your Windows host. If not, it automatically starts it and waits for it to boot.
 2. **WSL Connection:** It connects to your default WSL instance and changes the directory to your JARVIS workspace (`~/jarvis`).
 3. **Dynamic Networking:** It uses a networking command (`ip route show default | awk '{print $3}'`) to figure out the IP address of your Windows host from *within* WSL, allowing the WSL agent to communicate directly with the Windows Ollama API!
-4. **Agent Invocation:** Finally, it invokes `aider` interactively, explicitly pointing it to your local model (e.g., `qwen2.5-coder:14b`).
+4. **Agent Invocation:** Finally, it invokes `aider` interactively, explicitly pointing it to your local model (e.g., `qwen3.5:4b`).
 
 ## Prerequisites: Ollama & Aider Setup
 
 Before the bridge can work, you need to configure your local AI stack to allow WSL to communicate with Windows.
 
 1. **Install Ollama on Windows:** Download and install [Ollama](https://ollama.com/) for Windows.
-2. **Pull the Model:** Open a Windows PowerShell and download your preferred model (the bridge uses `qwen2.5-coder:14b` by default):
+2. **Pull the Model:** Open a Windows PowerShell and download your preferred model (the bridge uses `qwen3.5:4b` by default):
    ```powershell
-   ollama pull qwen2.5-coder:14b
+   ollama pull qwen3.5:4b
    ```
 3. **Configure Windows Networking:** By default, Ollama only listens to `localhost`. To allow WSL to reach it, you must bind it to all network interfaces:
    - Open Windows **Environment Variables**.

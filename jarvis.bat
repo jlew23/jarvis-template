@@ -9,4 +9,4 @@ if "%ERRORLEVEL%"=="1" (
 
 :: 2. Launch JARVIS directly through WSL
 echo [SYSTEM] JARVIS Booting Sequence Initiated...
-wsl bash -ic "cd ~/jarvis && export OLLAMA_API_BASE='http://$(ip route show default | awk '{print $3}'):11434' && aider --model ollama_chat/qwen2.5-coder:14b"
+wsl bash -ic "cd ~/jarvis && export OLLAMA_API_BASE='http://$(ip route show default | awk '{print $3}'):11434' && aider --model ollama_chat/qwen3.5:4b"
