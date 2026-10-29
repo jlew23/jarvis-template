@@ -64,7 +64,8 @@ jarvis/
 2. Read `CLAUDE.md`, `state/current.md`, `state/goals.md`
 3. Read today's session log if it exists (resume context)
 4. If no session log today, read yesterday's (for continuity)
-5. Present briefing
+5. Read the last 20 War Room hub messages (see Team Chat below)
+6. Present briefing
 
 **On checkpoint (`/update`):**
 1. Append brief notes to today's session log
@@ -74,6 +75,10 @@ jarvis/
 **On close (`/end`):**
 1. Full summary with topics, decisions, open threads
 2. Update session log and state
+
+### Team Chat
+
+TEAM CHAT: The War Room hub at 127.0.0.1:8765 is how we talk. At session start, read the last 20 hub messages. Post a one-line status to the hub when you start a task, hit a blocker, make a decision, or finish (python "D:\Users\Luda\Documents\jarvis-galaxy\jarvis-galaxy\agent-hub\hub.py" say --as <your name> "..."). Check the hub for @all or @<your name> messages between tasks. Don't wait for Luda to relay messages between agents.
 
 ### Slash Commands
 
@@ -95,4 +100,4 @@ This system is designed to evolve. As you use JARVIS:
 
 ---
 
-*Last updated: 2026-04-24*
+*Last updated: 2026-10-28*
