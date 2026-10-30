@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent War Room</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+  <aside id="sidebar" class="sidebar" aria-label="Team">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="#fff"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>
+      </div>
+      <div class="brand-text">
+        <div class="brand-title" id="appname">Agent War Room</div>
+        <div class="ready"><span class="dot idle"></span><span id="ready">0 Agents Ready</span></div>
+      </div>
+      <button id="side-close" class="icon-btn only-mobile" type="button" aria-label="Close team panel">&times;</button>
+    </div>
+
+    <div class="card discord" id="discord">
+      <svg class="dicon" viewBox="0 0 24 24" width="26" height="26" fill="currentColor" aria-hidden="true"><path d="M20.3 4.4A19.8 19.8 0 0 0 15.4 3l-.2.5a18 18 0 0 1 4.3 1.6 15 15 0 0 0-14.9 0A18 18 0 0 1 8.9 3.5L8.6 3a19.8 19.8 0 0 0-4.9 1.4C.6 9 0 13.5.3 18a19.9 19.9 0 0 0 6 3l1.3-2.1c-.7-.3-1.4-.6-2-1l.5-.4a14.2 14.2 0 0 0 12.2 0l.5.4c-.6.4-1.3.7-2 1l1.3 2.1a19.9 19.9 0 0 0 6-3c.4-5.2-.7-9.7-3.8-13.6zM8.500 15.300c-1.200 0-2.1-1.100-2.1-2.400s.9-2.400 2.1-2.400 2.200 1.100 2.1 2.400c0 1.3-.9 2.400-2.1 2.400zm7 0c-1.200 0-2.1-1.100-2.1-2.400s.9-2.400 2.1-2.400 2.200 1.100 2.1 2.400c0 1.3-.9 2.400-2.1 2.400z"/></svg>
+      <div>
+        <div class="card-title">Discord Live Mirror</div>
+        <div class="card-sub" id="discord-sub">Off: set DISCORD_WEBHOOK_URL</div>
+      </div>
+    </div>
+
+    <div class="section-label">ACTIVE AGENTS</div>
+    <ul id="agents" class="agents"></ul>
+
+    <div class="side-actions">
+      <button id="deliberate" class="cta" type="button">&#9889; Run Team Deliberation</button>
+      <button id="clear" class="outline" type="button">&#129529; Clear History</button>
+    </div>
+  </aside>
+  <div id="scrim" class="scrim" hidden></div>
+
+  <main class="main">
+    <header class="mhead">
+      <button id="menu" class="icon-btn only-mobile" type="button" aria-label="Open team panel">&#9776;</button>
+      <div class="mtitle">
+        <h1 id="channel">#agent-war-room</h1>
+        <div class="subtitle" id="subtitle">Shared multi-agent council. Local only.</div>
+      </div>
+      <div class="hprog" title="Mission progress">
+        <span id="hpct" class="hpct">0%</span>
+        <div class="bar thin hbar"><div id="hbar-partial" class="fill partial"></div><div id="hbar-done" class="fill done"></div></div>
+      </div>
+      <span id="conn" class="conn">connecting</span>
+      <button id="drawer-toggle" class="pill-btn" type="button" aria-expanded="true" aria-controls="drawer">Mission</button>
+    </header>
+
+    <nav id="filters" class="filters" aria-label="Filter messages"></nav>
+
+    <div id="log" class="log" aria-live="polite"></div>
+
+    <div class="composer">
+      <div class="direct"><span class="direct-label">Direct to:</span><span id="chips" class="chips"></span></div>
+      <div class="compose">
+        <div id="ac" class="ac" hidden></div>
+        <textarea id="input" rows="2" maxlength="8000" autocomplete="off"
+          placeholder="Type your message or task (e.g. '@all review our render pipeline and audit memory safety')..."></textarea>
+        <button id="send" class="send" type="button">Send &#10148;</button>
+      </div>
+    </div>
+  </main>
+
+  <aside id="drawer" class="drawer" aria-label="Mission">
+    <div class="drawer-head">
+      <h2 id="mission">Mission</h2>
+      <span id="complete" class="badge" hidden>COMPLETE</span>
+      <button id="drawer-close" class="icon-btn only-mobile" type="button" aria-label="Close mission">&times;</button>
+    </div>
+    <div class="pct-row"><span id="pct" class="pct">0%</span><span class="muted small">done</span></div>
+    <div class="bar big"><div id="bar-partial" class="fill partial"></div><div id="bar-done" class="fill done"></div></div>
+    <div class="bar thin" title="done + review at half weight"><div id="bar-partial2" class="fill partial"></div></div>
+    <div id="ptext" class="muted small"></div>
+    <h3 class="section-label">TASKS</h3>
+    <ul id="tasks" class="tasks"></ul>
+  </aside>
+</div>
+
+<div id="modal" class="modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <h3 id="modal-title"></h3>
+    <p id="modal-text" class="muted"></p>
+    <textarea id="modal-input" rows="4" maxlength="3000" hidden></textarea>
+    <div class="modal-actions">
+      <button id="modal-cancel" class="outline" type="button">Cancel</button>
+      <button id="modal-ok" class="primary" type="button">OK</button>
+    </div>
+  </div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

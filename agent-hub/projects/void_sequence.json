@@ -1,0 +1,20 @@
+{
+  "title": "Stranger Things E01: The Void sequence",
+  "required_passes": 2,
+  "done_definition": "Mike falls into the Void, the splash plays, and the scene continues as in the show, for the full ~2 min Void block of the opening 7 min. Every shot matches the reference cut shot for shot.",
+  "tasks": [
+    {"id":"V00","title":"Lock reference: shot-by-shot breakdown of the Void block (timecodes, framing, lens, action) from the user's reference","weight":1,"goal_critical":true,"status":"todo","owner":null,"notes":"","rounds":[]},
+    {"id":"V01","title":"Void environment: black mirror floor, shallow water plane with ripple/splash sim, fog, rim light rig (fix near-black luma 3-20 on RV085-RV091)","weight":2,"goal_critical":true,"status":"todo","owner":null,"notes":"","rounds":[]},
+    {"id":"V02","title":"Camera match: every Void shot's camera placement, lens and moves matched to reference","weight":2,"goal_critical":true,"status":"todo","owner":null,"notes":"","rounds":[]},
+    {"id":"V03","title":"Mike: walk into the Void and fall through the surface (animation)","weight":2,"goal_critical":true,"status":"todo","owner":null,"notes":"Exact RV shot numbers TBD: confirm from Project Storyteller STATE.md / shot list on the PC","rounds":[]},
+    {"id":"V04","title":"Splash: water impact sim + caching (Niagara/fluids) matched to reference timing","weight":2,"goal_critical":true,"status":"todo","owner":null,"notes":"Exact RV shot numbers TBD: confirm from Project Storyteller STATE.md / shot list on the PC","rounds":[]},
+    {"id":"V05","title":"Mike continues the scene after the splash, per reference","weight":2,"goal_critical":true,"status":"todo","owner":null,"notes":"Exact RV shot numbers TBD: confirm from Project Storyteller STATE.md / shot list on the PC","rounds":[]},
+    {"id":"V06","title":"El: replace T-pose with working animation in all Void shots","weight":2,"goal_critical":true,"status":"todo","owner":null,"notes":"","rounds":[]},
+    {"id":"V07","title":"Embrace / kiss RV085-RV091: retarget Flow Actor 1/2 mocap onto El and Mike","weight":2,"goal_critical":true,"status":"todo","owner":null,"notes":"","rounds":[]},
+    {"id":"V08","title":"Faces: facial animation/lipsync pass on Void shots","weight":1,"goal_critical":true,"status":"todo","owner":null,"notes":"","rounds":[]},
+    {"id":"V09","title":"Lighting & look: match reference grade per shot","weight":1,"goal_critical":true,"status":"todo","owner":null,"notes":"","rounds":[]},
+    {"id":"V10","title":"Render all Void shots (Movie Render Queue) + edit to reference timing","weight":2,"goal_critical":true,"status":"todo","owner":null,"notes":"","rounds":[]},
+    {"id":"V11","title":"Comp/finishing pass (Boris FX / Photoshop cleanup as needed)","weight":1,"goal_critical":false,"status":"todo","owner":null,"notes":"","rounds":[]},
+    {"id":"V12","title":"Side-by-side review vs reference: every shot signed off","weight":1,"goal_critical":true,"status":"todo","owner":null,"notes":"","rounds":[]}
+  ]
+}
