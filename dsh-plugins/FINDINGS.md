@@ -2,7 +2,7 @@
 
 This document records how the two plugins in this folder (`verdent-report` and `model-fallback`) were tested, everything that was found, what was fixed, and what is still unknown. It includes the mistakes made along the way, because users of these plugins should know how much to trust them and why.
 
-**Short version:** the plugins went through two rounds of automated review and a final judge, with about 400 tests across those rounds. The review found a design flaw that made `model-fallback` unable to work at all, data loss under parallel load, and tool output large enough to degrade the Manager's accuracy. All of these are fixed. **The plugins have not yet run inside a real DeepSeek Harness.** Every test ran against a stand-in host built from DeepSeek's source code. The first live run is the real test.
+**Short version:** the plugins went through two rounds of automated review and a final judge, with about 400 tests across those rounds. The review found a design flaw that made `model-fallback` unable to work at all, data loss under parallel load, and tool output large enough to degrade the Manager's accuracy. All of these are fixed. **The plugins have not yet run inside a real DeepSeek Harness, and they were written against a newer DeepSeek version (0.2.2-alpha.2) than the one installed (0.2.1-rc.3); see section 5.** Every test ran against a stand-in host built from DeepSeek's source code. The first live run is the real test.
 
 Dates: October 30 to 31, 2026. DeepSeek Harness source read: `deepseek-ai/deepseek-harness`, commit of October 30, 2026.
 
@@ -153,6 +153,7 @@ Reviews make mistakes in both directions. These are recorded so the findings can
 
 ## 5. What is not known yet
 
+- **Version mismatch (found after the review).** The plugins were written against DeepSeek Harness source version 0.2.2-alpha.2 (GitHub, October 30, 2026). The app installed on the target PC is 0.2.1-rc.3, two releases older. DeepSeek's upgrade guides for the releases in between (0.2.1-rc.4 and 0.2.2-alpha.2) mention no change to model selection or the hooks used here, but that is not proof. **`model-fallback` is unconfirmed on 0.2.1-rc.3** until the installed app is checked for the strings `use agent.model.select() before step preparation` and `model/selection`. Variable names change when code is bundled, but text in quotes survives, so these two strings show whether the function exists. Don't install `model-fallback` until that check passes. `verdent-report`'s hooks were found in the installed app by the user's own agent.
 - **No live run.** The plugins were never loaded into a real DeepSeek Harness. The stand-in copies the rules we read in the source, but it can't copy everything.
 - **Loading on the desktop app.** It is not confirmed how the installed app resolves plugin imports, or the exact syntax for adding a plugin inside a preset. The quick configs follow the pattern the existing Verdent layer uses.
 - **The stop check depends on the Manager.** It turns on only when a task message contains `task_id: <id>`. If the Manager prompt omits that, the reminder never fires; this fails safe, with no junk reports.
