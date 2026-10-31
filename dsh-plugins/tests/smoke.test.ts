@@ -201,3 +201,17 @@ test('fallback round-2 regressions: failures charged to the model that failed; c
     assert.equal((await step(host, b, { step: 2 })).selection.model, 'm23')
   }
 })
+
+test('fallback turns itself off on builds without agent.model.select (DeepSeek 0.2.1-rc.x)', async () => {
+  const host = createHost()
+  fallback.apply(host.ctx, { chains: { mOld: ['bOld'] } })
+  const old: any = { id: 'old', ctx: {}, steer() {} } // no .model, as in 0.2.1-rc.3
+  const signal = new AbortController().signal
+  const r = await host.waterfall('agent/request-error', { agent: old, turn: 1, step: 1, provider: 'deepseek', failure: { code: 'SERVER', message: 'x' }, signal }, async () => undefined)
+  assert.equal(r, undefined, 'no retry, no crash')
+  await host.waterfall('agent/pre-step', { agent: old, messages: [], turn: 1, step: 1, signal }, async () => ({ kind: 'continue' }))
+  await host.serial('agent/turn-stopping', { agent: old, turn: 1, signal })
+  const warnings = host.logs.filter((l: unknown[]) => l[0] === 'warn')
+  assert.equal(warnings.length, 1, 'one clear warning, once')
+  assert.match(String(warnings[0][1]), /needs 0\.2\.2-alpha\.2 or newer/)
+})

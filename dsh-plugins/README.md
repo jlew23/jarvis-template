@@ -61,7 +61,14 @@ config:
 
 Notes: a model id containing `/` needs its provider written in front (`openrouter/qwen/qwen3`). After a restart the plugin forgets its switches, so an agent left on a backup stays there until you change it. If the provider's `retryPolicy` is `mode: always`, llm-retry never gives up and the fallback never fires.
 
-> **Status:** `verdent-report` is ready for a live test. `model-fallback` is **unconfirmed** on DeepSeek Harness 0.2.1-rc.3 (it was built against 0.2.2-alpha.2); don't install it until the check in FINDINGS.md section 5 passes.
+> **Version support (checked against the published DeepSeek Harness packages):**
+>
+> | | 0.2.1-rc.3 | 0.2.1-rc.5 | 0.2.2-alpha.2 |
+> |---|---|---|---|
+> | `verdent-report` | works (hooks present; ran in a throwaway setup) | works (hooks present) | works |
+> | `model-fallback` | turns itself off with a warning | turns itself off with a warning | works |
+>
+> `model-fallback` needs `agent.model.select()`, which first appears in 0.2.2-alpha.2. Earlier builds only have `session.selectModel()`, a session-controller command a plugin can't reach the same way.
 
 ## Review findings
 

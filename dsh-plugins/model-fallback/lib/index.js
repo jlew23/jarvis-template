@@ -41,6 +41,19 @@ export function apply(ctx         , config        )       {
   /** Agents whose model the user changed: never moved by outage memory again. */
   const manual = new WeakSet       ()
 
+  // agent.model.select() exists from DeepSeek Harness 0.2.2-alpha.2. Older builds (0.2.1-rc.x)
+  // have no plugin-level way to change an agent's model, so the plugin turns itself off there.
+  let warnedUnsupported = false
+  const supported = (agent       )          => {
+    const model = (agent                                                       ).model
+    if (typeof model?.select === 'function' && typeof model.current === 'function') return true
+    if (!warnedUnsupported) {
+      warnedUnsupported = true
+      ctx.logger.warn('model-fallback: this DeepSeek Harness build has no agent.model.select() (needs 0.2.2-alpha.2 or newer); fallback is off')
+    }
+    return false
+  }
+
   const current = (agent       )                        => agent.model.current()                         
 
   function select(agent       , selection           , why        )       {
@@ -50,6 +63,7 @@ export function apply(ctx         , config        )       {
 
   /** Restore, forget, or follow a known outage. Takes effect from the next step. */
   function safePoint(agent       )       {
+    if (!supported(agent)) return
     const now = Date.now()
     const state = states.get(agent)
     const sel = current(agent)
@@ -76,7 +90,7 @@ export function apply(ctx         , config        )       {
   // Let llm-retry (and anything else) decide first; act only when nobody retries.
   ctx.on('agent/request-error', async ({ agent, failure, signal }, next)                              => {
     const downstream = await next()
-    if (downstream?.kind === 'retry' || signal.aborted) return downstream
+    if (downstream?.kind === 'retry' || signal.aborted || !supported(agent)) return downstream
     // The model that actually failed is the one this step was fixed on, not a pending selection.
     const failed = stepSelections.get(agent) ?? current(agent)
     if (!failed) return downstream
