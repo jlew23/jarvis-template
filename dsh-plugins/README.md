@@ -61,6 +61,10 @@ config:
 
 Notes: a model id containing `/` needs its provider written in front (`openrouter/qwen/qwen3`). After a restart the plugin forgets its switches, so an agent left on a backup stays there until you change it. If the provider's `retryPolicy` is `mode: always`, llm-retry never gives up and the fallback never fires.
 
+## Review findings
+
+Everything the review found, what was fixed, where the review itself was wrong, and what is still untested: [FINDINGS.md](FINDINGS.md). Read it before relying on these plugins.
+
 ## Quick configs
 
 Six ready-made setups (Solo, Team, Team cheap, Strict, Overnight, Test bench), with what each costs and why: [presets/README.md](presets/README.md).
