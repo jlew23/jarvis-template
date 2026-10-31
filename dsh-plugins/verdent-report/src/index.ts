@@ -321,7 +321,7 @@ export async function apply(ctx: Context, rawConfig: Config): Promise<void> {
       parameters: { name: { type: 'string', required: true } },
       output: textOutput,
       execute: args => guard(async () => {
-        const wanted = String(args.name).trim().replace(/\.md$/, '')
+        const wanted = String(args.name).trim().toLowerCase().replace(/\.md$/, '')
         const notFound = new NotSaved(`no playbook named ${describeInput(wanted)}`, 'Use the exact name from the Manager, or plan without it')
         // Names are report ids: no separators, no dot segments, nothing outside the folder.
         if (!/^[a-z0-9][a-z0-9_-]{0,100}$/.test(wanted)) throw notFound
@@ -384,7 +384,7 @@ export async function apply(ctx: Context, rawConfig: Config): Promise<void> {
         } else {
           const missing = ungradedCriteria(report, verdict)
           if (missing.length > 0) {
-            notes.push(`Playbook not saved: ${shortList(missing.map(m => `"${clip(m, 80)}"`), 10)} not graded. Call again including ${missing.length === 1 ? 'it' : 'them'} to save.`)
+            notes.push(`Playbook not saved: ${shortList(missing.map(m => `"${clip(m, 60)}"`), 5)} not graded. Call again including ${missing.length === 1 ? 'it' : 'them'} to save.`)
           } else if (report.playbook_steps.length === 0) {
             notes.push('No playbook steps in the report, so no playbook was saved.')
           } else {
@@ -415,7 +415,7 @@ export async function apply(ctx: Context, rawConfig: Config): Promise<void> {
         const v = await readJson<VerdictReport>(reportPath(taskId, 'verdict'))
         const problems = [w.problem, v.problem].filter(Boolean).join(' ')
         const view = renderTaskView(taskId, w.value, v.value, { worker: reportPath(taskId, 'worker'), verdict: reportPath(taskId, 'verdict') })
-        return problems ? `${view}\n${problems}` : view
+        return problems ? `${view}\n${clip(problems, 300)}` : view
       }),
     }))
     register(defineTool({
