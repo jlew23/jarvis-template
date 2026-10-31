@@ -17,19 +17,19 @@ Mount it once per preset with a `role`:
 
 | Role | Tools | Mount in |
 |---|---|---|
-| `worker` | `submit_worker_report_v1` | Worker preset |
+| `worker` | `submit_worker_report_v1`, `read_playbook_v1` | Worker preset |
 | `verifier` | `submit_verdict_v1` | Verifier preset |
-| `manager` | `read_task_report_v1`, `find_playbooks_v1` | Manager preset |
+| `manager` | `read_task_report_v1`, `find_playbooks_v1`, `recent_lessons_v1` | Manager preset |
+| `all` | every tool | single-agent testing only |
 
-What it enforces:
-- **Worker report:** `status` is `done`, `partial` or `blocked`. `done` is rejected unless every criterion is met and has evidence. `blocked` needs at least one open question. Task ids become file names, so only lowercase letters, digits, `-` and `_` are accepted.
-- **Verdict:** `PASS` is rejected while any criterion fails. A `FAIL` with every criterion met needs notes.
-- **Stop check:** a Worker or Verifier that ends its turn without reporting gets a reminder, at most `maxReminders` times (default 2) per task. The count resets when a new task message arrives.
-- **Lessons:** lessons from Worker reports, and every failed criterion from a `FAIL`, are appended to `<memoryDir>/lessons/inbox.md`.
-- **Playbooks:** on `PASS`, the Worker's `playbook_steps` are saved to `<memoryDir>/playbooks/<summary>.md`. `find_playbooks_v1` ranks them by keyword match.
-- **Reports on disk:** `<memoryDir>/reports/<task_id>.worker.json` and `.verdict.json`.
-
-The plugin writes these files itself, not through the model's sandboxed tools, so memory saving now works in every sandbox mode (the old limit of Full access only no longer applies). Nothing is written to the session log.
+What it does:
+- **Record, don't refuse.** Over-long fields are trimmed (summary 300 chars, evidence 1,000, notes 2,000, list items 400, 30 per list, 5 lessons), and the reply says what was cut. A "done" with unmet criteria is saved as "partial"; a "PASS" with failing criteria as "FAIL". Only things that can't be stored are refused (no criteria on "done", empty evidence on a met criterion, more than 50 criteria, a field over 10x its limit), with a one-line fix: `Not saved: <problem>. <fix>. Call again.`
+- **One record per submission.** Each worker report gets a unique id (`<task_id>-<timestamp>-<4 hex>`), so a task id reused in a later session can't overwrite an old playbook. A new report for a task moves its old verdict to `reports/archive/`. A verdict records which report it graded.
+- **Playbooks** (`playbooks/<report id>.md`) are saved only when a PASS grades every worker criterion; otherwise the reply names the missing ones. A FAIL moves that report's playbook to `playbooks/.retired/`. Nothing is deleted.
+- **Short output for the Manager.** `read_task_report_v1` gives one State line (not verified yet, failed verification, PASS, or blocked), only the criteria that need attention, and the JSON paths, capped at 2,000 chars. `find_playbooks_v1` returns names, titles, step counts and "done means", never the text. Weak matches are dropped. The Worker reads the steps itself with `read_playbook_v1`. `recent_lessons_v1` returns at most 10 short lines.
+- **Stop check.** It is armed when a message to the agent names a task id (`task_id: x`), whether it's the first task (`user`) or a follow-up from the Manager (`agent-message`). A plain question doesn't arm it. An agent that stops without reporting gets one reminder per turn, up to `maxReminders` per task (default 1), shared across all mounts. Each reminder causes one more model request.
+- **Lessons** from reports and from every failed criterion go to `lessons/inbox.md`, one line each, written before the report so they survive a later failure.
+- **Files** are written by the host with unique temp names and short retries (Windows antivirus and OneDrive can lock files briefly), so memory saving works in every sandbox mode. Nothing goes into the session log.
 
 Config:
 
@@ -37,24 +37,29 @@ Config:
 config:
   memoryDir: 'C:\Users\Luda\.dsh\manager-memory'   # required
   role: worker                                     # worker | verifier | manager | all
-  requireReportPresets: [worker-verdent]           # preset ids the stop check applies to; empty = every agent in this mount's scope
-  maxReminders: 2                                  # 0 turns the stop check off
+  requireReportPresets: [worker-verdent]           # optional; empty = every agent in this mount's scope
+  maxReminders: 1                                  # 0 turns the stop check off
 ```
 
 ## model-fallback
 
-Mount it once, globally. When a request fails and `llm-retry` has given up, the agent moves to the next model in its chain and the step is retried. It returns to its normal model at the next user or Manager message. Every switch is another billed request, and when the last backup fails the agent stops as usual.
+Mount it once, globally. DeepSeek fixes an agent's model when it prepares a step, and keeps it for every retry in that step, so a plugin can't swap models mid-step. This plugin works per turn instead:
+
+1. A request fails and llm-retry gives up. That step still fails, but the agent's model is switched to the next backup, so the next turn (the Manager's resend, or yours) runs on it.
+2. **Outage memory:** other agents on the same model move to the backup at their next step, instead of each paying for the same failed retries.
+3. After `cooldownMs` (default 5 minutes) the agent goes back to its normal model. If you changed the model yourself in the meantime, your choice is left alone.
 
 ```yaml
 config:
   chains:
     deepseek-v4-pro: [deepseek-flash]
     deepseek-flash: [deepseek-v4-pro]
+  cooldownMs: 300000
   # codes: failure codes that trigger a switch.
   # Default: RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT, EMPTY_RESPONSE, OVERLOADED. [] = any failure.
 ```
 
-Backups can name another provider as `provider/model`. If the provider's `retryPolicy` is `mode: always`, llm-retry never gives up, so the fallback never fires.
+Notes: a model id containing `/` needs its provider written in front (`openrouter/qwen/qwen3`). After a restart the plugin forgets its switches, so an agent left on a backup stays there until you change it. If the provider's `retryPolicy` is `mode: always`, llm-retry never gives up and the fallback never fires.
 
 ## Install
 
@@ -86,16 +91,17 @@ Backups can name another provider as `provider/model`. If the provider's `retryP
 
    Replace `worker-verdent` with the real preset ids from `verdent-presets.patch.yml`.
 4. Update the preset prompts so the agents use the tools:
-   - **Manager:** give every task a `task_id` and 3 to 7 checkable criteria. Run `find_playbooks_v1` before planning a task that resembles earlier work. After a Worker or Verifier finishes, read `read_task_report_v1` instead of trusting the chat summary.
-   - **Worker:** keep the criteria in a todo list and update it each step. Finish with `submit_worker_report_v1`, including `lessons` and `playbook_steps`.
-   - **Verifier:** check every criterion yourself and finish with `submit_verdict_v1`. Also run when a Worker reports `blocked`.
+   - **Manager:** start every task message with `task_id: <id>` and 3 to 7 checkable criteria. Before planning work like earlier tasks, run `find_playbooks_v1` and `recent_lessons_v1`, and pass a playbook name to the Worker. After a Worker or Verifier finishes, read `read_task_report_v1` instead of trusting the chat summary. Never read `lessons/inbox.md` whole.
+   - **Worker:** if given a playbook name, read it with `read_playbook_v1`. Keep the criteria in a todo list and update it each step. Finish with `submit_worker_report_v1`, copying each criterion exactly, with `lessons` and `playbook_steps`.
+   - **Verifier:** check every criterion yourself and finish with `submit_verdict_v1`, grading every worker criterion. Also run when a Worker reports `blocked`.
 5. Live test: one throwaway task through Manager, then Worker, then Verifier. Check `reports/`, `lessons/inbox.md` and `playbooks/` in the memory folder.
 
 ## How this was tested
 
-- 13 unit tests for the logic (`*/tests/core.test.ts`).
-- 4 smoke tests that load the built `lib/` files against small stand-ins for DeepSeek's `defineTool`, `createUserMessage` and its hook calls (`tests/smoke.test.ts`). They cover the full report flow, the stop check and the fallback chain.
-- **Not yet run inside DeepSeek Harness itself.** The hook and tool shapes were read from DeepSeek's source (`deepseek-ai/deepseek-harness`, October 30 2026), but the first live run on the PC is the real test.
+- 20 unit tests for the logic (`*/tests/core.test.ts`).
+- 9 integration tests (`tests/smoke.test.ts`) that load the built `lib/` files on `tests/fake-host.mjs`, a stand-in host that copies the real DeepSeek rules this code depends on: hook order, duplicate tool errors, model selection fixed per step (a plugin that changes it mid-step makes the host throw), and the message kinds Managers and helpers send.
+- A squad review: five tester agents ran about 290 tests over single, combined and stressed setups, then an Opus review panel triaged about 117 findings into the fixes above. That review caught a blocker the first version had (switching the model mid-step is rejected by the real host).
+- **Not yet run inside DeepSeek Harness itself.** The rules were read from DeepSeek's source (`deepseek-ai/deepseek-harness`, October 30 2026), but the first live run on the PC is the real test.
 
 ## Files
 

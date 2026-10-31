@@ -1,84 +1,149 @@
+// Integration smoke tests: the built lib/ files on a fake host that mirrors the
+// real DeepSeek Harness rules (see fake-host.mjs). Run via `node test.mjs`.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createAgent, createHost, loop, msg, mountLlmRetry, step } from './tests/fake-host.mjs'
 import * as report from './verdent-report/lib/index.js'
 import * as fallback from './model-fallback/lib/index.js'
 
-function fakeCtx(presets: Record<string, string> = {}) {
-  const tools = new Map<string, any>(); const handlers: Record<string, any[]> = {}
-  const ctx: any = {
-    tools: { register: (t: any) => tools.set(t.name, t) },
-    on: (ev: string, fn: any) => { (handlers[ev] ??= []).push(fn); return () => {} },
-    get: (n: string) => n === 'agentPresets' ? { composedPreset: (c: any) => presets[c?.id] } : undefined,
-    logger: { info() {}, warn() {} },
-  }
-  return { ctx, tools, handlers }
-}
-const agentObj = (id: string) => { const steered: any[] = []; return { ctx: { id }, steered, steer: (m: any) => steered.push(m) } }
 const crit = (criterion: string, met = true) => ({ criterion, met, evidence: met ? 'ran tests: 12 passed' : '' })
+const tmp = () => mkdtemp(join(tmpdir(), 'vr-'))
 
-test('report flow: worker, verdict PASS, playbook, find, read', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'vr-'))
-  const { ctx, tools } = fakeCtx()
-  await report.apply(ctx, { memoryDir: dir, role: 'all', maxReminders: 2 })
-  assert.deepEqual([...tools.keys()].sort(), ['find_playbooks_v1', 'read_task_report_v1', 'submit_verdict_v1', 'submit_worker_report_v1'])
-  const w = agentObj('w')
-  const out = await tools.get('submit_worker_report_v1').execute({ task_id: 'Shot-12', status: 'done', summary: 'Render shot 12 in Unreal', criteria: [crit('frame exists')], lessons: ['close Storyteller first to free RAM'], playbook_steps: ['open level', 'render'] }, { agent: w })
-  assert.match(out, /shot-12: done, 1\/1/)
-  await assert.rejects(tools.get('submit_worker_report_v1').execute({ task_id: 'x', status: 'done', summary: 's', criteria: [crit('a', false)] }, { agent: w }), /not met/)
-  const v = await tools.get('submit_verdict_v1').execute({ task_id: 'shot-12', verdict: 'PASS', criteria: [crit('frame exists')] }, { agent: agentObj('v') })
-  assert.match(v, /PASS.*Playbook saved/)
-  assert.deepEqual(await readdir(join(dir, 'playbooks')), ['render-shot-12-in-unreal.md'])
-  assert.match(await readFile(join(dir, 'lessons', 'inbox.md'), 'utf8'), /close Storyteller first/)
-  assert.match(await tools.get('find_playbooks_v1').execute({ query: 'render unreal shot' }), /render-shot-12-in-unreal\.md/)
-  const both = JSON.parse(await tools.get('read_task_report_v1').execute({ task_id: 'shot-12' }))
-  assert.equal(both.verdict.verdict, 'PASS')
-  await tools.get('submit_verdict_v1').execute({ task_id: 'shot-13', verdict: 'FAIL', criteria: [crit('frame exists', false)], notes: 'black frame' }, { agent: agentObj('v2') })
-  assert.match(await readFile(join(dir, 'lessons', 'inbox.md'), 'utf8'), /FAIL frame exists[\s\S]*black frame/)
+test('report flow: report, PASS saves a playbook named by report id, Manager sees names not text', async () => {
+  const dir = await tmp()
+  const host = createHost()
+  await report.apply(host.ctx, { memoryDir: dir, role: 'all' })
+  const w = createAgent('w')
+  const saved = await loop.tool(host, 'submit_worker_report_v1', { task_id: 'Shot-12', status: 'done', summary: 'Render shot 12 in Unreal', criteria: [crit('frame exists')], lessons: ['close Storyteller first to free RAM'], playbook_steps: ['open level', 'render'] }, w)
+  assert.match(saved, /^Saved: shot-12 done, 1\/1 met\. You are done/)
+  const v = await loop.tool(host, 'submit_verdict_v1', { task_id: 'shot-12', verdict: 'PASS', criteria: [crit('Frame exists.')] }, createAgent('v'))
+  assert.match(v, /PASS, 1\/1 pass\. Playbook saved: shot-12-\d{14}-[0-9a-f]{4}\./)
+  const [pbName] = await readdir(join(dir, 'playbooks')).then(n => n.filter(x => x.endsWith('.md')))
+  const found = await loop.tool(host, 'find_playbooks_v1', { query: 'render unreal shot' })
+  assert.match(found, new RegExp(`1\\. ${pbName!.replace('.md', '')} \\(score \\d+\\) "Render shot 12 in Unreal", 2 steps`))
+  assert.ok(!found.includes('open level'), 'no playbook text in the Manager context')
+  assert.match(await loop.tool(host, 'read_playbook_v1', { name: pbName!.replace('.md', '') }, w), /1\. open level/)
+  await assert.rejects(loop.tool(host, 'read_playbook_v1', { name: '../reports/shot-12.worker' }, w), /no playbook named/)
+  assert.match(await loop.tool(host, 'read_task_report_v1', { task_id: 'shot-12' }), /State: PASS\./)
+  assert.match(await loop.tool(host, 'recent_lessons_v1', { query: 'storyteller' }), /close Storyteller first/)
 })
 
-test('stop check reminds twice then lets go; report clears it; new task resets', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'vr-'))
-  const { ctx, tools, handlers } = fakeCtx({ w: 'worker-verdent', m: 'manager-verdent' })
-  await report.apply(ctx, { memoryDir: dir, role: 'worker', requireReportPresets: ['worker-verdent'] })
-  const stop = (a: any) => handlers['agent/turn-stopping']![0]({ agent: a })
-  const pre = (a: any, kind: string) => handlers['agent/pre-step']![0]({ agent: a, messages: [{ source: { kind } }] }, async () => undefined)
-  const w = agentObj('w'); const m = agentObj('m')
-  stop(m); assert.equal(m.steered.length, 0, 'manager preset is not checked')
-  stop(w); stop(w); stop(w)
-  assert.equal(w.steered.length, 2)
-  assert.match(w.steered[0].content[0].text, /submit_worker_report_v1/)
-  assert.equal(w.steered[0].source.kind, 'verdent-report')
-  await pre(w, 'user')
-  await tools.get('submit_worker_report_v1').execute({ task_id: 't', status: 'partial', summary: 's', criteria: [] }, { agent: w })
-  stop(w); assert.equal(w.steered.length, 2, 'no reminder after reporting')
-  await pre(w, 'verdent-report'); stop(w); assert.equal(w.steered.length, 2, 'own reminder does not reset')
-  await pre(w, 'user'); stop(w); assert.equal(w.steered.length, 3, 'new task resets')
+test('same summary on two tasks keeps two playbooks', async () => {
+  const dir = await tmp()
+  const host = createHost()
+  await report.apply(host.ctx, { memoryDir: dir, role: 'all' })
+  for (const id of ['a', 'b']) {
+    await loop.tool(host, 'submit_worker_report_v1', { task_id: id, status: 'done', summary: 'Fix login bug', criteria: [crit('works')], playbook_steps: [`step ${id}`] }, createAgent(id))
+    await loop.tool(host, 'submit_verdict_v1', { task_id: id, verdict: 'PASS', criteria: [crit('works')] }, createAgent(`v${id}`))
+  }
+  assert.equal((await readdir(join(dir, 'playbooks'))).filter(n => n.endsWith('.md')).length, 2)
 })
 
-test('config errors fail loud', async () => {
-  const { ctx } = fakeCtx()
-  await assert.rejects(report.apply(ctx, { memoryDir: '', role: 'worker' } as any), /memoryDir/)
-  await assert.rejects(report.apply(ctx, { memoryDir: '/tmp', role: 'boss' } as any), /role/)
-  assert.throws(() => fallback.apply(ctx, {} as any), /chains/)
+test('PASS that skips a worker criterion is recorded but saves no playbook; FAIL retires; resubmit archives the verdict', async () => {
+  const dir = await tmp()
+  const host = createHost()
+  await report.apply(host.ctx, { memoryDir: dir, role: 'all' })
+  await loop.tool(host, 'submit_worker_report_v1', { task_id: 't', status: 'partial', summary: 'Render', criteria: [crit('frame'), crit('audio', false)], playbook_steps: ['x'] }, createAgent('w'))
+  const v1 = await loop.tool(host, 'submit_verdict_v1', { task_id: 't', verdict: 'PASS', criteria: [crit('frame')] }, createAgent('v'))
+  assert.match(v1, /Playbook not saved: "audio" not graded\. Call again including it to save\./)
+  const v2 = await loop.tool(host, 'submit_verdict_v1', { task_id: 't', verdict: 'PASS', criteria: [crit('frame'), crit('audio')] }, createAgent('v'))
+  assert.match(v2, /Playbook saved/)
+  const v3 = await loop.tool(host, 'submit_verdict_v1', { task_id: 't', verdict: 'FAIL', criteria: [crit('frame'), crit('audio', false)], notes: 'no sound' }, createAgent('v'))
+  assert.match(v3, /Its playbook was retired\./)
+  assert.equal((await readdir(join(dir, 'playbooks'))).filter(n => n.endsWith('.md')).length, 0)
+  assert.equal((await readdir(join(dir, 'playbooks', '.retired'))).length, 1)
+  await loop.tool(host, 'submit_worker_report_v1', { task_id: 't', status: 'done', summary: 'Render again', criteria: [crit('frame'), crit('audio')] }, createAgent('w'))
+  assert.match(await loop.tool(host, 'read_task_report_v1', { task_id: 't' }), /State: not verified yet\./)
+  assert.equal((await readdir(join(dir, 'reports', 'archive'))).length, 1, 'old verdict archived, not deleted')
+  assert.match(await readFile(join(dir, 'lessons', 'inbox.md'), 'utf8'), /FAIL audio/)
 })
 
-test('model fallback: switch after retry gives up, walk chain, reset on new task', async () => {
-  const { ctx, handlers } = fakeCtx()
-  fallback.apply(ctx, { chains: { 'deepseek-v4-pro': ['deepseek-flash', 'openrouter/qwen3'] } })
-  const a: any = { id: 'a' }
-  const req = () => handlers['agent/request']![0]({ agent: a }, async () => ({ provider: 'deepseek', model: 'deepseek-v4-pro', maxTokens: 10 }))
-  const err = (code: string, downstream: any = undefined) => handlers['agent/request-error']![0]({ agent: a, failure: { code }, signal: new AbortController().signal }, async () => downstream)
-  assert.equal((await req()).model, 'deepseek-v4-pro')
-  assert.deepEqual(await err('RATE_LIMIT', { kind: 'retry' }), { kind: 'retry' }, 'llm-retry still retrying: pass through')
-  assert.equal(await err('AUTH'), undefined, 'non-listed code: no switch')
-  assert.deepEqual(await err('SERVER'), { kind: 'retry' })
-  const r1 = await req(); assert.equal(r1.model, 'deepseek-flash'); assert.equal(r1.maxTokens, 10)
-  assert.deepEqual(await err('SERVER'), { kind: 'retry' })
-  const r2 = await req(); assert.deepEqual([r2.provider, r2.model], ['openrouter', 'qwen3'])
-  assert.equal(await err('SERVER'), undefined, 'chain used up')
-  await handlers['agent/pre-step']![0]({ agent: a, messages: [{ source: { kind: 'user' } }] }, async () => undefined)
-  assert.equal((await req()).model, 'deepseek-v4-pro')
+test('20 parallel reports for one task: none fail, every lesson kept', async () => {
+  const dir = await tmp()
+  const host = createHost()
+  await report.apply(host.ctx, { memoryDir: dir, role: 'worker' })
+  const results = await Promise.allSettled(Array.from({ length: 20 }, (_, i) =>
+    loop.tool(host, 'submit_worker_report_v1', { task_id: 'same', status: 'partial', summary: 's', criteria: [], lessons: [`lesson ${i}`] }, createAgent(`w${i}`))))
+  assert.equal(results.filter(r => r.status === 'rejected').length, 0)
+  const inbox = await readFile(join(dir, 'lessons', 'inbox.md'), 'utf8')
+  for (let i = 0; i < 20; i++) assert.ok(inbox.includes(`- lesson ${i}\n`))
+  assert.deepEqual((await readdir(join(dir, 'reports'))).filter(n => n.endsWith('.tmp')), [])
+})
+
+test('stop check: armed by a task id in user or agent-message; one reminder per turn across mounts', async () => {
+  const dir = await tmp()
+  const host = createHost({ presets: { w: 'worker-verdent', v: 'verifier-verdent' } })
+  await report.apply(host.ctx, { memoryDir: dir, role: 'worker', maxReminders: 2 })
+  await report.apply(host.ctx, { memoryDir: dir, role: 'verifier', maxReminders: 2 })
+  const w = createAgent('w')
+  await loop.stop(host, w, 1)
+  assert.equal(w.steered.length, 0, 'not armed without a task id')
+  await loop.preStep(host, w, [msg.user('Do it. task_id: t1')], 1)
+  await loop.stop(host, w, 1)
+  assert.equal(w.steered.length, 1, 'two mounts, one reminder this turn')
+  await loop.stop(host, w, 1)
+  assert.equal(w.steered.length, 1, 'still one this turn')
+  await loop.preStep(host, w, [msg.agent('What is the status?')], 2)
+  await loop.stop(host, w, 2)
+  assert.equal(w.steered.length, 2, 'a plain question does not re-arm; second reminder in turn 2')
+  await loop.stop(host, w, 3)
+  assert.equal(w.steered.length, 2, 'maxReminders reached')
+  await loop.tool(host, 'submit_worker_report_v1', { task_id: 't1', status: 'partial', summary: 's', criteria: [] }, w)
+  await loop.preStep(host, w, [msg.agent('Next one. task_id: t2')], 4)
+  await loop.stop(host, w, 4)
+  assert.equal(w.steered.length, 3, 'follow-up task via agent-message re-arms')
+  assert.match(w.steered[2].content[0].text, /for t2/)
+})
+
+test('stop check respects presets and default maxReminders 1', async () => {
+  const host = createHost({ presets: { w: 'worker-verdent', m: 'manager-verdent' } })
+  await report.apply(host.ctx, { memoryDir: await tmp(), role: 'worker', requireReportPresets: ['worker-verdent'] })
+  const w = createAgent('w'); const m = createAgent('m')
+  for (const a of [w, m]) await loop.preStep(host, a, [msg.user('task_id: t1')], 1)
+  await loop.stop(host, m, 1); await loop.stop(host, w, 1); await loop.stop(host, w, 2)
+  assert.equal(m.steered.length, 0)
+  assert.equal(w.steered.length, 1)
+})
+
+test('config errors are clear', async () => {
+  const host = createHost()
+  await assert.rejects(report.apply(host.ctx, { memoryDir: '', role: 'worker' } as never), /memoryDir is required/)
+  await assert.rejects(report.apply(host.ctx, { memoryDir: '/tmp', role: 'boss' } as never), /role must be one of/)
+  await assert.rejects(report.apply(host.ctx, { memoryDir: '/tmp', role: 'worker', requireReportPresets: 'worker-verdent' } as never), /must be a list/)
+  await report.apply(host.ctx, { memoryDir: await tmp(), role: 'worker' })
+  await assert.rejects(report.apply(host.ctx, { memoryDir: await tmp(), role: 'worker' }), /verdent-report \(role worker\).*Mount each role once/)
+})
+
+test('fallback: no host error, switches from the next step, restores after cooldown', async () => {
+  const host = createHost()
+  mountLlmRetry(host, { maxRetries: 1 })
+  fallback.apply(host.ctx, { chains: { 'deepseek-v4-pro': ['deepseek-flash'] }, cooldownMs: 50 })
+  const a = createAgent('a')
+  const s1 = await step(host, a, { turn: 1, outcomes: ['SERVER', 'SERVER'] })
+  assert.equal(s1.result, 'error:SERVER', 'the failing step still fails')
+  assert.equal(s1.selection.model, 'deepseek-v4-pro')
+  const s2 = await step(host, a, { turn: 2, messages: [msg.agent('retry it')] })
+  assert.equal(s2.selection.model, 'deepseek-flash', 'next turn runs on the backup')
+  await new Promise(r => setTimeout(r, 60))
+  await loop.stop(host, a, 2)
+  const s3 = await step(host, a, { turn: 3 })
+  assert.equal(s3.selection.model, 'deepseek-v4-pro', 'back to primary after the cooldown')
+})
+
+test('fallback: outage memory moves other agents; a user model change is left alone', async () => {
+  const host = createHost()
+  fallback.apply(host.ctx, { chains: { 'deepseek-v4-pro': ['deepseek-flash'] }, cooldownMs: 60_000 })
+  const a = createAgent('a'); const b = createAgent('b'); const c = createAgent('c')
+  await step(host, a, { outcomes: ['SERVER'] })
+  await step(host, b, { turn: 1 })
+  const sb = await step(host, b, { turn: 1, step: 2 })
+  assert.equal(sb.selection.model, 'deepseek-flash', 'b follows the known outage from its next step')
+  await step(host, c, { outcomes: ['AUTH'] })
+  assert.equal((await step(host, c, { turn: 2 })).selection.model, 'deepseek-flash', 'c also follows the outage')
+  a.model.select({ provider: 'deepseek', model: 'my-choice' })
+  await loop.stop(host, a, 1)
+  assert.equal((await step(host, a, { turn: 2 })).selection.model, 'my-choice')
 })

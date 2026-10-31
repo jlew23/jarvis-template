@@ -1,66 +1,96 @@
 /**
  * Model-fallback plugin for DeepSeek Harness.
  *
- * When a model request fails and `llm-retry` has given up (its own retries are
- * spent, or the failure is not retryable), switch that agent to the next model
- * in its configured chain and retry the step. The agent goes back to its normal
- * model at the next user or Manager message.
+ * DeepSeek fixes an agent's model when it prepares a step, and keeps it for
+ * every retry of that step; a plugin may only change it with
+ * `agent.model.select()` before the next step. So this plugin works per turn:
  *
- * Retries cost money: every switch is another billed request. The chain is
- * finite, so the agent stops when the last backup fails.
+ * 1. A request fails and llm-retry gives up. The step still fails, as before,
+ *    but the plugin selects the next backup in the chain, so the next turn
+ *    (the Manager's or your resend) runs on the backup.
+ * 2. Outage memory: other agents on the same primary are moved to the backup
+ *    at their next safe point instead of each rediscovering the outage.
+ * 3. After `cooldownMs` (default 5 minutes) the agent goes back to its primary.
+ *    If you changed the model yourself, the plugin leaves your choice alone.
+ *
+ * Every switch costs nothing by itself; every request on a backup is billed.
+ * After a restart the plugin forgets its switches, so an agent left on a
+ * backup stays there until you change it.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, PreStepDecision, RequestErrorAction } from '@deepseek-ai/dsh-agent'
-import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
-import { advance, chainFor, parseConfig, resolve, shouldSwitch } from './core.ts'
-import type { FallbackConfig, FallbackState } from './core.ts'
+import { backupSelection, chainFor, onFailure, onSafePoint, parseConfig, selectionKey } from './core.ts'
+import type { FallbackConfig, FallbackState, Selection } from './core.ts'
 
 export const name = 'model-fallback'
 
 export type Config = FallbackConfig
 
+/** Outage memory shared by every agent: primary "provider/model" -> failing until (ms). */
+const outages = new Map<string, number>()
+const states = new WeakMap<Agent, FallbackState>()
+
 export function apply(ctx: Context, config: Config): void {
   const parsed = parseConfig(config)
-  const states = new WeakMap<Agent, FallbackState>()
-  /** The provider/model each agent last requested, before our override. */
-  const lastPrimary = new WeakMap<Agent, { provider: string; model: string }>()
 
-  // Override the model for agents that are in fallback.
-  ctx.on('agent/request', async ({ agent }, next): Promise<LlmCallConfig> => {
-    const callConfig = await next()
+  const current = (agent: Agent): Selection | undefined => agent.model.current() as Selection | undefined
+
+  function select(agent: Agent, selection: Selection, why: string): void {
+    agent.model.select(selection)
+    ctx.logger.info(`model-fallback: agent ${agent.id} -> ${selectionKey(selection)} (${why})`)
+  }
+
+  /** Before the next step is prepared: restore, forget, or follow a known outage. */
+  function safePoint(agent: Agent): void {
+    const now = Date.now()
     const state = states.get(agent)
-    const primary = state ? { provider: state.primaryProvider, model: state.primaryModel } : { provider: callConfig.provider, model: callConfig.model }
-    lastPrimary.set(agent, primary)
-    const chain = chainFor(parsed, primary.provider, primary.model)
-    const target = resolve(state, chain, primary.provider, primary.model)
-    if (target.provider === callConfig.provider && target.model === callConfig.model) return callConfig
-    return { ...callConfig, provider: target.provider, model: target.model }
-  })
+    const sel = current(agent)
+    if (state) {
+      const d = onSafePoint(parsed, state, sel, now)
+      if (d.kind === 'forget') states.delete(agent)
+      else if (d.kind === 'restore' && (outages.get(selectionKey(state.primary)) ?? 0) <= now) {
+        states.delete(agent)
+        select(agent, d.selection, 'cooldown over, back to primary')
+      }
+      return
+    }
+    if (!sel) return
+    const until = outages.get(selectionKey(sel)) ?? 0
+    if (until <= now) return
+    const chain = chainFor(parsed, sel)
+    if (!chain) return
+    const backup = backupSelection(sel, chain, 0)
+    states.set(agent, { primary: sel, selected: backup, index: 0, since: now, exhausted: false })
+    select(agent, backup, `${selectionKey(sel)} failed recently for another agent`)
+  }
 
-  // Let llm-retry (and anything else) decide first; switch only when nobody retries.
+  // Let llm-retry (and anything else) decide first; act only when nobody retries.
   ctx.on('agent/request-error', async ({ agent, failure, signal }, next): Promise<RequestErrorAction> => {
     const downstream = await next()
     if (downstream?.kind === 'retry' || signal.aborted) return downstream
-    if (!shouldSwitch(parsed, failure.code)) return downstream
-    const primary = lastPrimary.get(agent)
-    if (!primary) return downstream
-    const chain = chainFor(parsed, primary.provider, primary.model)
-    if (!chain) return downstream
-    const nextState = advance(states.get(agent), chain, primary.provider, primary.model)
-    if (!nextState) {
-      ctx.logger.warn(`model-fallback: every backup for ${primary.model} failed (${failure.code}); stopping`)
-      return downstream
+    const sel = current(agent)
+    if (!sel) return downstream
+    const now = Date.now()
+    const decision = onFailure(parsed, states.get(agent), sel, failure.code, now)
+    if (decision.kind === 'select') {
+      states.set(agent, decision.state)
+      outages.set(selectionKey(decision.state.primary), now + parsed.cooldownMs)
+      select(agent, decision.selection, `${selectionKey(sel)} failed with ${failure.code}; used from the next turn`)
+    } else if (decision.kind === 'exhausted') {
+      states.set(agent, decision.state)
+      ctx.logger.warn(`model-fallback: every backup for ${selectionKey(decision.state.primary)} failed (${failure.code}); staying on ${selectionKey(sel)}`)
     }
-    states.set(agent, nextState)
-    const target = resolve(nextState, chain, primary.provider, primary.model)
-    ctx.logger.info(`model-fallback: ${primary.model} failed with ${failure.code}; retrying on ${target.provider}/${target.model}`)
-    return { kind: 'retry' }
+    // The failing step ends as it would have; the switch applies from the next step.
+    return downstream
   })
 
-  // A new user or Manager message goes back to the primary model.
-  ctx.on('agent/pre-step', ({ agent, messages }, next): Promise<PreStepDecision> => {
-    if (messages.some(m => m.source.kind === 'user')) states.delete(agent)
+  // Safe points: between steps and at turn boundaries, before the next step is prepared.
+  ctx.on('agent/pre-step', ({ agent }, next): Promise<PreStepDecision> => {
+    safePoint(agent)
     return next()
+  })
+  ctx.on('agent/turn-stopping', ({ agent }) => {
+    safePoint(agent)
   })
 }

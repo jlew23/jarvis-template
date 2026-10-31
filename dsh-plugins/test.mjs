@@ -27,4 +27,5 @@ for (const [name, code] of Object.entries(stubs)) {
   await writeFile(join(dir, 'index.js'), code)
 }
 await cp(join(root, 'tests', 'smoke.test.ts'), join(tmp, 'smoke.test.ts'))
+// smoke.test.ts imports ./tests/fake-host.mjs, copied above with tests/
 run(['smoke.test.ts'], tmp)

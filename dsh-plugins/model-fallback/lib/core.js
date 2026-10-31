@@ -1,7 +1,7 @@
 // Generated from src/core.ts by build.mjs. Do not edit.
 /**
- * Pure logic for the model-fallback plugin: parsing the chain config and
- * deciding which model an agent should use next. No harness imports.
+ * Pure logic for the model-fallback plugin: config parsing, chain lookup, and
+ * the decisions the plugin makes at each hook. No harness imports.
  */
 
                            
@@ -9,19 +9,34 @@
                
  
 
+                            
+                  
+               
+                          
+ 
+
                                  
                                                                  
                                   
-                                                                                      
+                                                                                          
                   
+                                                                                          
+                     
  
 
 export const DEFAULT_CODES = ['RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT', 'EMPTY_RESPONSE', 'OVERLOADED']
+export const DEFAULT_COOLDOWN_MS = 5 * 60_000
 
-/** "provider/model" or "model". Model ids may themselves contain "/" after the first segment only when a provider is given. */
-export function parseRef(text        )           {
+const PREFIX = 'model-fallback config'
+
+/**
+ * "provider/model" or "model". The first "/" splits provider from model, so a
+ * model id that itself contains "/" must be written with its provider.
+ */
+export function parseRef(text         , where        )           {
+  if (typeof text !== 'string') throw new Error(`${PREFIX}: ${where} must be a text model id, got ${JSON.stringify(text)}`)
   const value = text.trim()
-  if (value === '') throw new Error('model-fallback: empty model reference')
+  if (value === '') throw new Error(`${PREFIX}: ${where} is empty`)
   const slash = value.indexOf('/')
   if (slash <= 0 || slash === value.length - 1) return { model: value }
   return { provider: value.slice(0, slash), model: value.slice(slash + 1) }
@@ -34,55 +49,97 @@ export function refKey(ref          )         {
                                
                                  
                                 
+                    
  
 
 export function parseConfig(config                )               {
-  if (config === null || typeof config !== 'object' || typeof config.chains !== 'object' || config.chains === null) {
-    throw new Error('model-fallback: `chains` is required, e.g. { "deepseek-v4-pro": ["deepseek-flash"] }')
+  if (config === null || typeof config !== 'object' || typeof config.chains !== 'object' || config.chains === null || Array.isArray(config.chains)) {
+    throw new Error(`${PREFIX}: chains is required, e.g. { deepseek-v4-pro: [deepseek-flash] }`)
   }
   const chains = new Map                    ()
-  for (const [primary, backups] of Object.entries(config.chains)) {
-    if (!Array.isArray(backups) || backups.length === 0) throw new Error(`model-fallback: chain for ${primary} must list at least one backup`)
-    const refs = backups.map(parseRef)
-    const keys = new Set(refs.map(refKey))
-    if (keys.size !== refs.length) throw new Error(`model-fallback: chain for ${primary} has duplicates`)
-    if (keys.has(refKey(parseRef(primary)))) throw new Error(`model-fallback: chain for ${primary} lists itself`)
-    chains.set(refKey(parseRef(primary)), refs)
+  for (const [primaryText, backups] of Object.entries(config.chains)) {
+    const primary = parseRef(primaryText, `chain key ${JSON.stringify(primaryText)}`)
+    if (!Array.isArray(backups) || backups.length === 0) throw new Error(`${PREFIX}: chain for ${primaryText} must list at least one backup`)
+    const refs = backups.map((b, i) => parseRef(b, `chains.${primaryText}[${i}]`))
+    // Compare by model id when either side leaves the provider out.
+    const same = (a          , b          ) => a.model === b.model && (!a.provider || !b.provider || a.provider === b.provider)
+    refs.forEach((r, i) => {
+      if (same(r, primary)) throw new Error(`${PREFIX}: chain for ${primaryText} lists itself at [${i}]`)
+      if (refs.slice(0, i).some(o => same(o, r))) throw new Error(`${PREFIX}: chain for ${primaryText} lists ${refKey(r)} twice`)
+    })
+    chains.set(refKey(primary), refs)
+  }
+  if (config.codes !== undefined && (!Array.isArray(config.codes) || config.codes.some(c => typeof c !== 'string'))) {
+    throw new Error(`${PREFIX}: codes must be a list, e.g. [RATE_LIMIT, SERVER]`)
   }
   const codes = config.codes === undefined ? new Set(DEFAULT_CODES) : config.codes.length === 0 ? undefined : new Set(config.codes)
-  return { chains, codes }
+  const cooldownMs = config.cooldownMs ?? DEFAULT_COOLDOWN_MS
+  if (!Number.isFinite(cooldownMs) || cooldownMs < 0) throw new Error(`${PREFIX}: cooldownMs must be a number >= 0`)
+  return { chains, codes, cooldownMs }
 }
 
-/** The chain for a request's primary model: exact provider/model first, then model id alone. */
-export function chainFor(parsed              , provider        , model        )                         {
-  return parsed.chains.get(`${provider}/${model}`) ?? parsed.chains.get(model)
+export function chainFor(parsed              , sel                                     )                         {
+  return parsed.chains.get(`${sel.provider}/${sel.model}`) ?? parsed.chains.get(sel.model)
 }
 
 export function shouldSwitch(parsed              , code        )          {
   return parsed.codes === undefined || parsed.codes.has(code)
 }
 
-/**
- * Per-agent fallback position. `index` -1 means the primary model; 0.. are
- * backups. `primary` remembers which model the chain belongs to.
- */
-                                
-                         
-                      
-               
- 
-
-/** Advance to the next backup, or return undefined when the chain is used up. */
-export function advance(state                           , chain            , provider        , model        )                            {
-  const current = state ?? { primaryProvider: provider, primaryModel: model, index: -1 }
-  const next = current.index + 1
-  if (next >= chain.length) return undefined
-  return { ...current, index: next }
+export function sameSelection(a                       , b                       )          {
+  return a !== undefined && b !== undefined && a.provider === b.provider && a.model === b.model
 }
 
-/** The model a request should use, given the agent's state. */
-export function resolve(state                           , chain                        , provider        , model        )                                      {
-  if (state === undefined || chain === undefined || state.index < 0) return { provider, model }
-  const ref = chain[state.index] 
-  return { provider: ref.provider ?? state.primaryProvider, model: ref.model }
+export function selectionKey(s                                     )         {
+  return `${s.provider}/${s.model}`
+}
+
+/** Backup selection for chain entry `index`, on the primary's provider unless the entry names one. */
+export function backupSelection(primary           , chain            , index        )            {
+  const ref = chain[index] 
+  return { provider: ref.provider ?? primary.provider, model: ref.model }
+}
+
+/** Per-agent fallback record: what we switched from, what we selected, and when. */
+                                
+                    
+                     
+               
+               
+                                                                                            
+                    
+ 
+
+                      
+                    
+                                                                  
+                                               
+
+/**
+ * After a request failed and nobody retried it: choose the next backup.
+ * `current` is the selection the failing step used.
+ */
+export function onFailure(parsed              , state                           , current           , code        , now        )           {
+  if (!shouldSwitch(parsed, code)) return { kind: 'none' }
+  // If the user changed the model since we switched, start over from their choice.
+  const live = state && sameSelection(state.selected, current) ? state : undefined
+  const primary = live?.primary ?? current
+  const chain = chainFor(parsed, primary)
+  if (!chain) return { kind: 'none' }
+  if (live?.exhausted) return { kind: 'none' }
+  const index = live ? live.index + 1 : 0
+  if (index >= chain.length) return { kind: 'exhausted', state: { ...(live ?? { primary, selected: current, index: index - 1, since: now }), exhausted: true } }
+  const selection = backupSelection(primary, chain, index)
+  return { kind: 'select', selection, state: { primary, selected: selection, index, since: now, exhausted: false } }
+}
+
+/**
+ * At a safe point (before the next step is prepared): go back to the primary
+ * once the cooldown has passed, unless the user picked another model.
+ */
+export function onSafePoint(parsed              , state               , current                       , now        ) 
+                                                                                    {
+  if (!sameSelection(state.selected, current)) return { kind: 'forget' } // user changed the model
+  if (now - state.since < parsed.cooldownMs) return { kind: 'keep' }
+  return { kind: 'restore', selection: state.primary }
 }
