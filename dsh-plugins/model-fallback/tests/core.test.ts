@@ -64,6 +64,9 @@ test('onSafePoint restores after the cooldown only', () => {
   const p = parseConfig({ chains: { 'deepseek-v4-pro': ['deepseek-flash'] }, cooldownMs: 1000 })
   const d = onFailure(p, undefined, pro, 'SERVER', 0)
   if (d.kind !== 'select') throw new Error('expected select')
-  assert.equal(onSafePoint(p, d.state, flash, 999).kind, 'keep')
-  assert.deepEqual(onSafePoint(p, d.state, flash, 1000), { kind: 'restore', selection: pro })
+  assert.equal(onSafePoint(p, d.state, flash, 5000).kind, 'keep', 'never used yet: no restore')
+  const used = { ...d.state, used: true, since: 0 }
+  assert.equal(onSafePoint(p, used, flash, 999).kind, 'keep')
+  assert.deepEqual(onSafePoint(p, used, flash, 1000), { kind: 'restore', selection: pro })
+  assert.equal(onSafePoint(p, used, undefined, 5000).kind, 'keep', 'unknown current selection keeps state')
 })

@@ -25,6 +25,8 @@
  
 
 export const DEFAULT_CODES = ['RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT', 'EMPTY_RESPONSE', 'OVERLOADED']
+/** Only provider-side failures say the model is down for everyone; one agent's bad prompt does not. */
+export const OUTAGE_CODES = new Set(['RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT', 'OVERLOADED'])
 export const DEFAULT_COOLDOWN_MS = 5 * 60_000
 
 const PREFIX = 'model-fallback config'
@@ -108,6 +110,8 @@ export function backupSelection(primary           , chain            , index    
                
                                                                                             
                     
+                                                                                                 
+               
  
 
                       
@@ -128,9 +132,9 @@ export function onFailure(parsed              , state                           
   if (!chain) return { kind: 'none' }
   if (live?.exhausted) return { kind: 'none' }
   const index = live ? live.index + 1 : 0
-  if (index >= chain.length) return { kind: 'exhausted', state: { ...(live ?? { primary, selected: current, index: index - 1, since: now }), exhausted: true } }
+  if (index >= chain.length) return { kind: 'exhausted', state: { ...(live ?? { primary, selected: current, index: index - 1, since: now, used: true }), exhausted: true } }
   const selection = backupSelection(primary, chain, index)
-  return { kind: 'select', selection, state: { primary, selected: selection, index, since: now, exhausted: false } }
+  return { kind: 'select', selection, state: { primary, selected: selection, index, since: now, exhausted: false, used: false } }
 }
 
 /**
@@ -139,7 +143,8 @@ export function onFailure(parsed              , state                           
  */
 export function onSafePoint(parsed              , state               , current                       , now        ) 
                                                                                     {
+  if (current === undefined) return { kind: 'keep' } // no information: keep what we know
   if (!sameSelection(state.selected, current)) return { kind: 'forget' } // user changed the model
-  if (now - state.since < parsed.cooldownMs) return { kind: 'keep' }
+  if (!state.used || now - state.since < parsed.cooldownMs) return { kind: 'keep' }
   return { kind: 'restore', selection: state.primary }
 }

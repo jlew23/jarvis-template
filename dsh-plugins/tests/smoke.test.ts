@@ -20,7 +20,7 @@ test('report flow: report, PASS saves a playbook named by report id, Manager see
   const saved = await loop.tool(host, 'submit_worker_report_v1', { task_id: 'Shot-12', status: 'done', summary: 'Render shot 12 in Unreal', criteria: [crit('frame exists')], lessons: ['close Storyteller first to free RAM'], playbook_steps: ['open level', 'render'] }, w)
   assert.match(saved, /^Saved: shot-12 done, 1\/1 met\. You are done/)
   const v = await loop.tool(host, 'submit_verdict_v1', { task_id: 'shot-12', verdict: 'PASS', criteria: [crit('Frame exists.')] }, createAgent('v'))
-  assert.match(v, /PASS, 1\/1 pass\. Playbook saved: shot-12-\d{14}-[0-9a-f]{4}\./)
+  assert.match(v, /PASS, 1\/1 pass\. Playbook saved: shot-12-\d{14}-[0-9a-f]{8}\./)
   const [pbName] = await readdir(join(dir, 'playbooks')).then(n => n.filter(x => x.endsWith('.md')))
   const found = await loop.tool(host, 'find_playbooks_v1', { query: 'render unreal shot' })
   assert.match(found, new RegExp(`1\\. ${pbName!.replace('.md', '')} \\(score \\d+\\) "Render shot 12 in Unreal", 2 steps`))
@@ -146,4 +146,58 @@ test('fallback: outage memory moves other agents; a user model change is left al
   a.model.select({ provider: 'deepseek', model: 'my-choice' })
   await loop.stop(host, a, 1)
   assert.equal((await step(host, a, { turn: 2 })).selection.model, 'my-choice')
+})
+
+test('fallback round-2 regressions: failures charged to the model that failed; cooldown 0; user pick during outage', async () => {
+  // R2B-17: outage known at pre-step, but this step was fixed on the primary and fails -> next step uses backup 1.
+  {
+    const host = createHost()
+    fallback.apply(host.ctx, { chains: { m17: ['b17a', 'b17b'] }, cooldownMs: 60_000 })
+    const a = createAgent('a', { model: 'm17' }); const b = createAgent('b', { model: 'm17' })
+    await step(host, a, { outcomes: ['SERVER'] })
+    await step(host, b, { outcomes: ['SERVER'] })
+    assert.equal((await step(host, b, { step: 2 })).selection.model, 'b17a')
+  }
+  // R2B-16: a restore is decided while a step runs on the backup, and that step fails -> not blamed on the primary.
+  {
+    const host = createHost()
+    fallback.apply(host.ctx, { chains: { m16: ['b16a', 'b16b'] }, cooldownMs: 30 })
+    const a = createAgent('a', { model: 'm16' })
+    await step(host, a, { turn: 1, outcomes: ['SERVER'] })
+    await step(host, a, { turn: 2 }) // runs on b16a: cooldown starts
+    await new Promise(r => setTimeout(r, 40))
+    await step(host, a, { turn: 3, outcomes: ['SERVER'] }) // fixed on b16a; pre-step decides restore; b16a fails
+    const s4 = await step(host, a, { turn: 4 })
+    assert.notEqual(s4.selection.model, 'b16a', 'the failed backup is not re-selected')
+  }
+  // R2B-19: cooldownMs 0 still runs the next turn on the backup once.
+  {
+    const host = createHost()
+    fallback.apply(host.ctx, { chains: { m19: ['b19'] }, cooldownMs: 0 })
+    const a = createAgent('a', { model: 'm19' })
+    await step(host, a, { turn: 1, outcomes: ['SERVER'] })
+    await loop.stop(host, a, 1)
+    assert.equal((await step(host, a, { turn: 2 })).selection.model, 'b19')
+  }
+  // R2B-20: the user picks the primary during an outage -> left alone.
+  {
+    const host = createHost()
+    fallback.apply(host.ctx, { chains: { m20: ['b20'] }, cooldownMs: 60_000 })
+    const a = createAgent('a', { model: 'm20' }); const u = createAgent('u', { model: 'm20' })
+    await step(host, a, { outcomes: ['SERVER'] })
+    await step(host, u, { turn: 1 }) // u is moved to b20 by outage memory
+    u.model.select({ provider: 'deepseek', model: 'm20' }) // the user insists on the primary
+    await step(host, u, { turn: 2 })
+    await loop.stop(host, u, 2)
+    assert.equal((await step(host, u, { turn: 3 })).selection.model, 'm20')
+  }
+  // R2B-23: a bad prompt (EMPTY_RESPONSE) switches that agent but is not an outage for others.
+  {
+    const host = createHost()
+    fallback.apply(host.ctx, { chains: { m23: ['b23'] } })
+    const a = createAgent('a', { model: 'm23' }); const b = createAgent('b', { model: 'm23' })
+    await step(host, a, { outcomes: ['EMPTY_RESPONSE'] })
+    await step(host, b)
+    assert.equal((await step(host, b, { step: 2 })).selection.model, 'm23')
+  }
 })

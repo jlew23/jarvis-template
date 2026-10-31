@@ -18,38 +18,47 @@ test('task ids', () => {
 })
 
 test('report ids are unique per submission and sortable', () => {
-  assert.equal(makeReportId('t1', now, rand), 't1-20261031123456-8000')
+  assert.equal(makeReportId('t1', now, rand), 't1-20261031123456-80008000')
   assert.notEqual(makeReportId('t1', now, () => 0.1), makeReportId('t1', now, () => 0.2))
 })
 
 test('done with unmet criteria is recorded as partial, not refused', () => {
-  const { report, trimmed } = worker({ criteria: [crit('a', true), crit('b', false)] })
+  const { report, changes } = worker({ criteria: [crit('a', true), crit('b', false)] })
   assert.equal(report.status, 'partial')
-  assert.match(trimmed.join(), /changed to "partial"/)
+  assert.match(changes.join(), /recorded as "partial"/)
+  
 })
 
 test('refusals are fixable in one retry', () => {
   assert.throws(() => worker({ criteria: [] }), /Not saved: status "done" with no criteria\..*Call again\./)
   assert.throws(() => worker({ criteria: [{ criterion: 'a', met: true, evidence: ' ' }] }), /met:true with empty evidence\. Add proof or set met:false/)
   assert.throws(() => worker({ status: 'blocked', criteria: [] }), /open_questions/)
-  assert.throws(() => worker({ summary: 'x'.repeat(3001) }), /summary is 3001 characters/)
-  assert.throws(() => worker({ criteria: Array.from({ length: 51 }, (_, i) => crit(`c${i}`, true)) }), /51 criteria/)
+  assert.equal(worker({ summary: 'x'.repeat(30001) }).report.summary.length, 300, 'trimmed, not refused')
+  const many = worker({ criteria: Array.from({ length: 51 }, (_, i) => crit(`c${i}`, true)) })
+  assert.equal(many.report.criteria.length, 50)
+  assert.match(many.trimmed.join(), /kept first 50 of 51/)
+  assert.throws(() => normalizeTaskId('x'.repeat(5000)), (e: Error) => e.message.length < 200)
 })
 
 test('long fields are trimmed and reported', () => {
   const { report, trimmed } = worker({ summary: `line one\nline two ${'x'.repeat(400)}`, lessons: ['a', 'b', 'c', 'd', 'e', 'f', ' '] })
   assert.equal(report.summary.length, 300)
   assert.ok(!report.summary.includes('\n'))
-  assert.equal(report.lessons.length, 5)
+  assert.equal(report.lessons.length, 3)
   assert.match(trimmed.join(), /summary cut to 300/)
-  assert.match(trimmed.join(), /lessons: kept first 5 of 6/)
+  assert.match(trimmed.join(), /lessons: kept first 3 of 6/)
 })
 
-test('duplicate criteria are merged; met must be literally true', () => {
+test('duplicate criteria are merged; a failure is never hidden; met must be literally true', () => {
   const { report } = worker({ criteria: [crit('Tests pass', true), crit('tests  pass!', true), { criterion: 'x', met: 'false', evidence: '' }] })
   assert.equal(report.criteria.length, 2)
   assert.equal(report.criteria[1]!.met, false)
   assert.equal(report.status, 'partial')
+  const w2 = worker({ criteria: [crit('Tests (unit)', true), crit('tests unit', false)] })
+  assert.equal(w2.report.status, 'partial', 'the unmet duplicate wins')
+  assert.match(w2.changes.join(), /listed twice with different results/)
+  const v = buildVerdict({ task_id: 't', verdict: 'PASS', criteria: [crit('Fix #1', true), crit('fix 1', false)] }, null, now)
+  assert.equal(v.verdict.verdict, 'FAIL')
 })
 
 test('verdict: PASS with failures becomes FAIL; FAIL needs a reason', () => {
@@ -76,6 +85,7 @@ test('tokenizer: unicode, short words, digits, stop words, plurals, CJK pairs', 
   assert.ok(words('修复登录').includes('登录'))
   assert.ok(words('Кадр').includes('кадр'))
   assert.deepEqual(words('class css'), ['class', 'css'])
+  assert.ok(words('Unreal渲染 scene').includes('unreal'), 'mixed Latin+CJK token is split')
 })
 
 test('ranking: title weight, score floor, newest wins ties, CJK works', () => {
@@ -101,7 +111,7 @@ test('playbook list is names and counts, not text', () => {
   const meta = parsePlaybook(`${report.report_id}.md`, md)
   assert.equal(meta.steps, 2)
   const out = renderPlaybookList([{ name: meta.name, score: 6 }], new Map([[meta.name, meta]]))
-  assert.match(out, /1\. t1-20261031123456-8000 \(score 6\) "Fixed it", 2 steps\. Done means: tests pass\./)
+  assert.match(out, /1\. t1-20261031123456-80008000 \(score 6\) "Fixed it", 2 steps\. Done means: tests pass\./)
   assert.ok(!out.includes('open level'))
   assert.equal(renderPlaybookList([], new Map()), 'No close playbook matches. Plan from scratch.')
 })
@@ -116,7 +126,13 @@ test('task view: state line, only disputed criteria, capped', () => {
   const stale = renderTaskView('t1', report, { ...verdict, graded_report_id: 'older' }, { worker: 'w', verdict: 'v' })
   assert.match(stale, /saved verdict is for an older report/)
   const big = worker({ status: 'partial', criteria: Array.from({ length: 50 }, (_, i) => crit(`criterion ${i} ${'y'.repeat(300)}`, false, 'e'.repeat(900))) }).report
-  assert.ok(renderTaskView('t1', big, undefined, { worker: 'w', verdict: 'v' }).length <= 2000)
+  const bigView = renderTaskView('t1', { ...big, open_questions: ['Which codec?'] }, undefined, { worker: 'w', verdict: 'v' })
+  assert.ok(bigView.length <= 2000)
+  assert.match(bigView, /Open questions: Which codec\?/, 'questions survive a long criteria list')
+  assert.match(bigView, /\+47 more not met or disputed/)
+  assert.ok(renderTaskView('t1', big, undefined, { worker: 'w'.repeat(5000), verdict: 'v' }).length <= 2000, 'long paths cannot break the cap')
+  const { verdict: partialPass } = buildVerdict({ task_id: 't1', verdict: 'PASS', criteria: [crit('Renders at 4K', true)] }, report.report_id, now)
+  assert.match(renderTaskView('t1', report, partialPass, { worker: 'w', verdict: 'v' }), /State: PASS, but 2 worker criteria were not graded/)
 })
 
 test('reminders and task id detection', () => {
@@ -126,4 +142,8 @@ test('reminders and task id detection', () => {
   assert.equal(taskIdInText('Please do this. task_id: Shot-12\nDone means...'), 'shot-12')
   assert.equal(taskIdInText('task id = `t7`'), 't7')
   assert.equal(taskIdInText('What is the status?'), undefined)
+  assert.equal(taskIdInText('What is the task id format for reports?'), undefined)
+  assert.equal(taskIdInText('the task idea was good'), undefined)
+  assert.equal(taskIdInText('Which task id is stale?'), undefined)
+  assert.equal(taskIdInText('Task ID: `T13`.'), 't13')
 })

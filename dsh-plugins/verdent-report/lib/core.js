@@ -24,10 +24,8 @@ export const LIMITS = {
   notes: 2000,
   listItem: 400,
   listItems: 30,
-  lessons: 5,
+  lessons: 3,
   criteria: 50,
-  /** Fields longer than this many times their limit are refused outright. */
-  refuseFactor: 10,
 }         
 
                                   
@@ -91,9 +89,14 @@ const TASK_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
 export function normalizeTaskId(raw        )         {
   const id = String(raw).trim().toLowerCase()
   if (!TASK_ID_RE.test(id)) {
-    throw new NotSaved(`task_id ${JSON.stringify(raw)} is not valid`, 'Use the id from the Manager: 1 to 64 letters, digits, "-" or "_"')
+    throw new NotSaved(`task_id ${describeInput(String(raw))} is not valid`, 'Use the id from the Manager: 1 to 64 letters, digits, "-" or "_"')
   }
   return id
+}
+
+/** Describe model input in an error without echoing it in full. */
+export function describeInput(text        )         {
+  return text.length <= 40 ? JSON.stringify(text) : `${JSON.stringify(text.slice(0, 40))}... (${text.length} chars)`
 }
 
 /** Collapse whitespace (including newlines) to single spaces. */
@@ -103,13 +106,13 @@ export function oneLine(text        )         {
 
 /** Records what was trimmed so the reply can say so. */
 export class Trimmer {
+  /** Fields that were cut or dropped. */
            notes           = []
+  /** Changes to the meaning of the report (status or verdict changed, criteria merged). */
+           changes           = []
 
   text(value        , limit        , field        , collapse = false)         {
     const clean = collapse ? oneLine(value) : value.trim()
-    if (clean.length > limit * LIMITS.refuseFactor) {
-      throw new NotSaved(`${field} is ${clean.length} characters`, `Keep it under ${limit}`)
-    }
     if (clean.length <= limit) return clean
     this.notes.push(`${field} cut to ${limit} chars`)
     return `${clean.slice(0, limit - 1)}…`
@@ -123,23 +126,35 @@ export class Trimmer {
 }
 
 function cleanCriteria(values                               , t         )                    {
-  const list = values ?? []
+  let list = values ?? []
   if (list.length > LIMITS.criteria) {
-    throw new NotSaved(`${list.length} criteria`, `Keep it to ${LIMITS.criteria} or fewer`)
+    t.notes.push(`criteria: kept first ${LIMITS.criteria} of ${list.length}`)
+    list = list.slice(0, LIMITS.criteria)
   }
-  const seen = new Set        ()
+  const byKey = new Map                ()
   const out                    = []
   list.forEach((item, i) => {
     const criterion = t.text(String(item?.criterion ?? ''), LIMITS.listItem, `criteria[${i}].criterion`, true)
     if (criterion.length === 0) throw new NotSaved(`criteria[${i}] has no criterion text`, 'Copy the criterion as given')
-    const key = criterionKey(criterion)
-    if (seen.has(key)) return // duplicate: keep the first
-    seen.add(key)
     const met = item.met === true
     const evidence = t.text(String(item?.evidence ?? ''), LIMITS.evidence, `criteria[${i}].evidence`)
     if (met && evidence.length === 0) {
       throw new NotSaved(`criteria[${i}] is met:true with empty evidence`, 'Add proof or set met:false')
     }
+    const key = criterionKey(criterion)
+    const prev = byKey.get(key)
+    if (prev !== undefined) {
+      // Same criterion twice. Never let a pass hide a failure: keep the not-met one.
+      const first = out[prev] 
+      if (first.met !== met) {
+        if (first.met) out[prev] = { criterion: first.criterion, met: false, evidence }
+        t.changes.push(`"${clip(criterion, 60)}" was listed twice with different results; kept as not met`)
+      } else {
+        t.notes.push(`criteria[${i}] duplicates "${clip(first.criterion, 60)}"`)
+      }
+      return
+    }
+    byKey.set(key, out.length)
     out.push({ criterion, met, evidence })
   })
   return out
@@ -150,14 +165,14 @@ export function criterionKey(text        )         {
   return text.toLowerCase().normalize('NFKC').replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
 }
 
-/** `<task_id>-<yyyymmddhhmmss>-<4 hex>` from a date and a random source. */
+/** `<task_id>-<yyyymmddhhmmss>-<8 hex>` from a date and a random source. */
 export function makeReportId(taskId        , now      , rand              )         {
   const stamp = now.toISOString().replace(/[-:T]/g, '').slice(0, 14)
-  const hex = Math.floor(rand() * 0x10000).toString(16).padStart(4, '0')
+  const hex = Math.floor(rand() * 0x10000).toString(16).padStart(4, '0') + Math.floor(rand() * 0x10000).toString(16).padStart(4, '0')
   return `${taskId}-${stamp}-${hex}`
 }
 
-export function buildWorkerReport(args                  , now      , rand              )                                              {
+export function buildWorkerReport(args                  , now      , rand              )                                                                 {
   const t = new Trimmer()
   const task_id = normalizeTaskId(args.task_id)
   const summary = t.text(String(args.summary ?? ''), LIMITS.summary, 'summary', true)
@@ -183,16 +198,16 @@ export function buildWorkerReport(args                  , now      , rand       
       // Record it as partial instead of making the model redo the report.
       status = 'partial'
       report.status = 'partial'
-      t.notes.push(`status changed to "partial": ${unmet} criteria not met`)
+      t.changes.push(`recorded as "partial": ${unmet} criteria not met`)
     }
   }
   if (status === 'blocked' && report.open_questions.length === 0) {
     throw new NotSaved('status "blocked" with no open_questions', 'Add what you need to continue')
   }
-  return { report, trimmed: t.notes }
+  return { report, trimmed: t.notes, changes: t.changes }
 }
 
-export function buildVerdict(args             , gradedReportId               , now      )                                                {
+export function buildVerdict(args             , gradedReportId               , now      )                                                                   {
   const t = new Trimmer()
   const criteria = cleanCriteria(args.criteria, t)
   if (criteria.length === 0) throw new NotSaved('no criteria graded', 'Grade each definition-of-done item')
@@ -208,13 +223,13 @@ export function buildVerdict(args             , gradedReportId               , n
     const failed = criteria.filter(c => !c.met).length
     if (failed > 0) {
       verdict.verdict = 'FAIL'
-      t.notes.push(`verdict changed to FAIL: ${failed} criteria do not pass`)
+      t.changes.push(`recorded as FAIL: ${failed} criteria do not pass`)
     }
   }
   if (verdict.verdict === 'FAIL' && verdict.notes.length === 0 && criteria.every(c => c.met)) {
     throw new NotSaved('FAIL with every criterion passing and no notes', 'Say in notes what is wrong, or use PASS')
   }
-  return { verdict, trimmed: t.notes }
+  return { verdict, trimmed: t.notes, changes: t.changes }
 }
 
 /** Worker criteria the verdict did not grade (matched by criterionKey). */
@@ -272,17 +287,34 @@ const HAN_KANA = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u
 export function words(text        )           {
   const out           = []
   for (const raw of text.toLowerCase().normalize('NFKC').match(/[\p{L}\p{N}]+/gu) ?? []) {
-    if (HAN_KANA.test(raw)) {
-      const chars = [...raw]
-      if (chars.length === 1) out.push(raw)
-      for (let i = 0; i + 1 < chars.length; i++) out.push(chars[i]  + chars[i + 1] )
-      continue
+    // Split mixed tokens such as "Unreal渲染" into their Latin and CJK parts.
+    for (const part of raw.match(SCRIPT_RUN) ?? []) {
+      if (HAN_KANA.test(part)) {
+        const chars = [...part]
+        if (chars.length === 1) out.push(part)
+        for (let i = 0; i + 1 < chars.length; i++) out.push(chars[i]  + chars[i + 1] )
+        continue
+      }
+      if (STOP_WORDS.has(part)) continue
+      if (part.length < 2 && !/^\d+$/.test(part)) continue
+      out.push(part.length > 3 && part.endsWith('s') && !part.endsWith('ss') ? part.slice(0, -1) : part)
     }
-    if (STOP_WORDS.has(raw)) continue
-    if (raw.length < 2 && !/^\d+$/.test(raw)) continue
-    out.push(raw.length > 3 && raw.endsWith('s') && !raw.endsWith('ss') ? raw.slice(0, -1) : raw)
   }
   return out
+}
+
+const SCRIPT_RUN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+|[^\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+/gu
+
+/** A playbook prepared for ranking, so a search needn't re-read or re-tokenize files. */
+                                  
+                    
+                         
+                        
+ 
+
+export function indexPlaybook(name        , text        )                  {
+  const meta = parsePlaybook(name, text)
+  return { meta: { ...meta, text: '' }, titleWords: new Set(words(meta.title)), bodyWords: new Set(words(text)) }
 }
 
                               
@@ -296,20 +328,18 @@ export function words(text        )           {
  * wrong playbook is followed faithfully by a cheap model. Ties go to the
  * newest file (names start with the report id, which embeds a timestamp).
  */
-export function rankPlaybooks(query        , files                                  , limit = 3)                {
+export function rankPlaybooks(query        , files                                                      , limit = 3)                {
   const wanted = new Set(words(query))
   if (wanted.size === 0) return []
   const hits                = []
   for (const file of files) {
-    const meta = parsePlaybook(file.name, file.text)
-    const titleWords = new Set(words(meta.title))
-    const bodyWords = new Set(words(file.text))
+    const entry = 'meta' in file ? file : indexPlaybook(file.name, file.text)
     let score = 0
     for (const w of wanted) {
-      if (titleWords.has(w)) score += 3
-      else if (bodyWords.has(w)) score += 1
+      if (entry.titleWords.has(w)) score += 3
+      else if (entry.bodyWords.has(w)) score += 1
     }
-    if (score > 0) hits.push({ name: file.name, score })
+    if (score > 0) hits.push({ name: entry.meta.name, score })
   }
   hits.sort((a, b) => b.score - a.score || stampOf(b.name).localeCompare(stampOf(a.name)) || a.name.localeCompare(b.name))
   const top = hits[0]?.score ?? 0
@@ -317,7 +347,7 @@ export function rankPlaybooks(query        , files                              
 }
 
 function stampOf(name        )         {
-  return name.match(/-(\d{14})-[0-9a-f]{4}\.md$/)?.[1] ?? ''
+  return name.match(/-(\d{14})-[0-9a-f]{4,8}\.md$/)?.[1] ?? ''
 }
 
 export function clip(text        , max        )         {
@@ -326,21 +356,30 @@ export function clip(text        , max        )         {
 
 // ---- model-facing text ------------------------------------------------------
 
-function trimmedNote(trimmed          )         {
-  return trimmed.length > 0 ? ` Trimmed: ${trimmed.join('; ')}.` : ''
+/** Short list: the first few items, then a count. */
+export function shortList(items          , show = 3)         {
+  if (items.length <= show) return items.join('; ')
+  return `${items.slice(0, show).join('; ')}; and ${items.length - show} more`
 }
 
-export function renderWorkerSaved(report              , trimmed          , warnings          )         {
+function notesText(trimmed          , changes          )         {
+  const parts           = []
+  if (changes.length > 0) parts.push(` ${shortList(changes)}.`)
+  if (trimmed.length > 0) parts.push(` Trimmed ${trimmed.length} field${trimmed.length === 1 ? '' : 's'}: ${shortList(trimmed)}.`)
+  return parts.join('')
+}
+
+const DONE = ' You are done: end with one line, no repeat summary.'
+
+export function renderWorkerSaved(report              , trimmed          , warnings          , changes           = [])         {
   const met = report.criteria.filter(c => c.met).length
-  return `Saved: ${report.task_id} ${report.status}, ${met}/${report.criteria.length} met.${trimmedNote(trimmed)}`
-    + (warnings.length > 0 ? ` ${warnings.join(' ')}` : '')
-    + ' You are done: end with one line, no repeat summary.'
+  return `Saved: ${report.task_id} ${report.status}, ${met}/${report.criteria.length} met.${notesText(trimmed, changes)}`
+    + (warnings.length > 0 ? ` ${warnings.join(' ')}` : '') + DONE
 }
 
-export function renderVerdictSaved(verdict               , trimmed          , outcome        )         {
+export function renderVerdictSaved(verdict               , trimmed          , outcome        , changes           = [])         {
   const met = verdict.criteria.filter(c => c.met).length
-  return `Saved: ${verdict.task_id} ${verdict.verdict}, ${met}/${verdict.criteria.length} pass.${trimmedNote(trimmed)} ${outcome}`
-    + ' You are done: end with one line, no repeat summary.'
+  return `Saved: ${verdict.task_id} ${verdict.verdict}, ${met}/${verdict.criteria.length} pass.${notesText(trimmed, changes)} ${outcome}`.trimEnd() + DONE
 }
 
 /**
@@ -355,39 +394,43 @@ export function renderTaskView(
   max = 2000,
 )         {
   if (!report && !verdict) return `No report saved for ${taskId}.`
-  const lines           = []
   const current = verdict !== undefined && (report === undefined || verdict.graded_report_id === report.report_id)
   const v = current ? verdict : undefined
   const wMet = report ? report.criteria.filter(c => c.met).length : 0
   const vMet = v ? v.criteria.filter(c => c.met).length : 0
+  const ungraded = report && v ? ungradedCriteria(report, v).length : 0
   const head = [
     report ? `worker ${report.status} (${wMet}/${report.criteria.length} met)` : 'no worker report',
     v ? `verifier ${v.verdict} (${vMet}/${v.criteria.length})` : 'not verified',
   ]
   const state = !report ? 'verdict without a worker report'
     : !v ? (verdict ? 'not verified (the saved verdict is for an older report)' : report.status === 'blocked' ? 'blocked, needs an answer' : 'not verified yet')
-      : v.verdict === 'PASS' ? 'PASS' : 'failed verification'
-  lines.push(`Task ${taskId}: ${head.join(', ')}. State: ${state}.`)
+      : v.verdict === 'PASS' ? (ungraded > 0 ? `PASS, but ${ungraded} worker criteria were not graded (no playbook saved)` : 'PASS')
+        : 'failed verification'
+  // Most decision-relevant first: state, questions, notes, then the criteria.
+  const lines           = [`Task ${taskId}: ${head.join(', ')}. State: ${state}.`]
+  if (report?.open_questions.length) lines.push(`Open questions: ${clip(report.open_questions.join('; '), 400)}`)
+  if (v?.notes) lines.push(`Verifier notes: ${clip(oneLine(v.notes), 300)}`)
+  if (report?.files_changed.length) lines.push(`Files: ${clip(report.files_changed.join(', '), 200)}`)
   if (report) {
     const vByKey = new Map((v?.criteria ?? []).map(c => [criterionKey(c.criterion), c]))
     const attention           = []
     for (const c of report.criteria) {
       const g = vByKey.get(criterionKey(c.criterion))
       if (c.met && g?.met === true) continue
-      const wPart = c.met ? 'worker met' : 'worker not met'
-      const vPart = !v ? '' : !g ? '; verifier did not grade' : g.met ? '; verifier met' : `; verifier not: ${clip(oneLine(g.evidence || 'no evidence'), 200)}`
-      const ev = !c.met ? `: ${clip(oneLine(c.evidence || 'no evidence'), 200)}` : ''
-      attention.push(`- "${c.criterion}": ${wPart}${ev}${vPart}`)
+      const wPart = c.met ? 'worker met' : `worker not met: ${clip(oneLine(c.evidence || 'no evidence'), 100)}`
+      const vPart = !v ? '' : !g ? '; verifier did not grade' : g.met ? '; verifier met' : `; verifier not: ${clip(oneLine(g.evidence || 'no evidence'), 100)}`
+      attention.push(`- "${clip(c.criterion, 120)}": ${wPart}${vPart}`)
     }
-    if (attention.length > 0) lines.push('Not met or disputed:', ...attention)
-    if (report.open_questions.length > 0) lines.push(`Open questions: ${report.open_questions.join('; ')}`)
-    if (report.files_changed.length > 0) lines.push(`Files: ${report.files_changed.join(', ')}`)
+    if (attention.length > 0) {
+      lines.push('Not met or disputed:', ...attention.slice(0, 3))
+      if (attention.length > 3) lines.push(`+${attention.length - 3} more not met or disputed (see JSON).`)
+    }
   }
-  if (v?.notes) lines.push(`Verifier notes: ${clip(oneLine(v.notes), 300)}`)
-  const tail = `JSON: ${paths.worker}${verdict ? `, ${paths.verdict}` : ''}`
-  let body = lines.join('\n')
-  if (body.length + tail.length + 1 > max) body = `${body.slice(0, max - tail.length - 16)}… (cut)`
-  return `${body}\n${tail}`
+  const tail = `JSON: ${clip(paths.worker, 300)}${verdict ? `, ${clip(paths.verdict, 300)}` : ''}`
+  const body = lines.join('\n')
+  const room = Math.max(0, max - tail.length - 1)
+  return `${body.length > room ? `${body.slice(0, Math.max(0, room - 8))}… (cut)` : body}\n${tail}`
 }
 
 export function renderPlaybookList(hits               , metas                           )         {
@@ -426,8 +469,11 @@ export function missingReportReminder(kind              , attempt        , max  
   return `You have not reported${task}. Worker: call submit_worker_report_v1. Verifier: call submit_verdict_v1. Use what you already have; do not redo work. ${n}`
 }
 
-/** Task id named in a message, if any: `task_id: x`, `task id = x` or `task-id x`. */
+/**
+ * Task id named in a message: `task_id: x` or `task id = x` (a ":" or "=" is
+ * required, so prose like "what is the task id format" does not count).
+ */
 export function taskIdInText(text        )                     {
-  const m = text.match(/\btask[ _-]?id\s*[:=]?\s*[`"']?([A-Za-z0-9][A-Za-z0-9_-]{0,63})/i)
+  const m = text.match(/\btask[ _-]?id\s*[:=]\s*[`"']?([A-Za-z0-9][A-Za-z0-9_-]{0,63})(?![A-Za-z0-9_-])/i)
   return m ? m[1] .toLowerCase() : undefined
 }

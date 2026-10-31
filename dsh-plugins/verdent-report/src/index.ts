@@ -27,14 +27,14 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { randomUUID } from 'node:crypto'
-import { appendFile, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
-  NotSaved, VERDICTS, WORKER_STATUSES, buildVerdict, buildWorkerReport, clip, lessonsEntry, missingReportReminder,
-  normalizeTaskId, parsePlaybook, playbookMarkdown, rankPlaybooks, renderLessons, renderPlaybookList, renderTaskView,
-  renderVerdictSaved, renderWorkerSaved, taskIdInText, ungradedCriteria, words,
+  NotSaved, VERDICTS, WORKER_STATUSES, buildVerdict, buildWorkerReport, clip, describeInput, indexPlaybook, lessonsEntry,
+  missingReportReminder, normalizeTaskId, playbookMarkdown, rankPlaybooks, renderLessons, renderPlaybookList, renderTaskView,
+  renderVerdictSaved, renderWorkerSaved, shortList, taskIdInText, ungradedCriteria, words,
 } from './core.ts'
-import type { PlaybookMeta, ReminderKind, VerdictReport, WorkerReport } from './core.ts'
+import type { IndexedPlaybook, PlaybookMeta, ReminderKind, VerdictReport, WorkerReport } from './core.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -229,7 +229,10 @@ export async function apply(ctx: Context, rawConfig: Config): Promise<void> {
     }
   }
 
-  async function listPlaybooks(): Promise<{ name: string; text: string }[]> {
+  /** Search index: one entry per playbook, refreshed only when a file's mtime or size changes. */
+  const index = new Map<string, { stamp: string; entry: IndexedPlaybook }>()
+
+  async function indexedPlaybooks(): Promise<IndexedPlaybook[]> {
     let names: string[]
     try {
       names = (await readdir(dirs.playbooks)).filter(n => n.endsWith('.md'))
@@ -237,14 +240,26 @@ export async function apply(ctx: Context, rawConfig: Config): Promise<void> {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
       throw error
     }
-    const files = await Promise.all(names.map(async n => {
-      try {
-        return { name: n, text: (await readFile(join(dirs.playbooks, n), 'utf8')).slice(0, 64 * 1024) }
-      } catch {
-        return undefined
+    const live = new Set(names)
+    for (const n of index.keys()) if (!live.has(n)) index.delete(n)
+    // Bounded concurrency: a large library must not open thousands of files at once.
+    let next = 0
+    const worker = async () => {
+      while (next < names.length) {
+        const n = names[next++]!
+        try {
+          const st = await stat(join(dirs.playbooks, n))
+          const stamp = `${st.mtimeMs}:${st.size}`
+          if (index.get(n)?.stamp === stamp) continue
+          const text = (await readFile(join(dirs.playbooks, n), 'utf8')).slice(0, 64 * 1024)
+          index.set(n, { stamp, entry: indexPlaybook(n, text) })
+        } catch {
+          index.delete(n)
+        }
       }
-    }))
-    return files.filter((f): f is { name: string; text: string } => f !== undefined)
+    }
+    await Promise.all(Array.from({ length: Math.min(16, names.length) }, worker))
+    return [...index.values()].map(v => v.entry)
   }
 
   const has = (role: Role) => config.role === role || config.role === 'all'
@@ -268,14 +283,14 @@ export async function apply(ctx: Context, rawConfig: Config): Promise<void> {
         status: { type: 'string', required: true, enum: [...WORKER_STATUSES] },
         summary: { type: 'string', required: true, description: 'One sentence: what you did.' },
         criteria: { type: 'array', required: true, items: criterionItems, description: 'One entry per definition-of-done item.' },
-        files_changed: stringList('Paths you created or edited.'),
+        files_changed: stringList('Paths created or edited.'),
         open_questions: stringList('Needed to continue. Required if blocked.'),
-        lessons: stringList('Up to 3 short lessons.'),
+        lessons: stringList('Up to 3 short lessons, including what went wrong.'),
         playbook_steps: stringList('Steps that worked, in order, reusable.'),
       },
       output: textOutput,
       execute: (args, exec) => guard(async () => {
-        const { report, trimmed } = buildWorkerReport(args as Parameters<typeof buildWorkerReport>[0], new Date(), Math.random)
+        const { report, trimmed, changes } = buildWorkerReport(args as Parameters<typeof buildWorkerReport>[0], new Date(), Math.random)
         const warnings: string[] = []
         // Lessons first, so a later failure cannot lose them.
         const lessonProblem = await appendLessons(lessonsEntry(today(), report.report_id, `worker, ${report.status}`, report.lessons))
@@ -296,21 +311,30 @@ export async function apply(ctx: Context, rawConfig: Config): Promise<void> {
           throw new StoreError(`Not saved: could not write ${describe(error, reportPath(report.task_id, 'worker'))}. Tell the Manager; do not retry more than once.`)
         }
         markReported(exec.agent, report.task_id)
-        return renderWorkerSaved(report, trimmed, warnings)
+        return renderWorkerSaved(report, trimmed, warnings, changes)
       }),
       presentCall: args => ({ card: 'generic', title: `Report: ${String(args.task_id)} (${String(args.status)})`, kind: 'other', rawInput: args }),
     }))
     register(defineTool({
       name: 'read_playbook_v1',
-      description: 'Read a saved playbook (steps that passed verification before) by the name the Manager gave you. Follow it only where it fits your task.',
-      parameters: { name: { type: 'string', required: true, description: 'Playbook name from the Manager.' } },
+      description: 'Read a verified playbook by the name the Manager gave you. Follow it only where it fits.',
+      parameters: { name: { type: 'string', required: true } },
       output: textOutput,
       execute: args => guard(async () => {
         const wanted = String(args.name).trim().replace(/\.md$/, '')
-        const names = (await listPlaybooks()).map(f => f.name)
-        const match = names.find(n => n === `${wanted}.md`)
-        if (!match) throw new NotSaved(`no playbook named ${JSON.stringify(wanted)}`, 'Use the exact name from the Manager, or plan without it')
-        return clip(await readFile(join(dirs.playbooks, match), 'utf8'), 4000)
+        const notFound = new NotSaved(`no playbook named ${describeInput(wanted)}`, 'Use the exact name from the Manager, or plan without it')
+        // Names are report ids: no separators, no dot segments, nothing outside the folder.
+        if (!/^[a-z0-9][a-z0-9_-]{0,100}$/.test(wanted)) throw notFound
+        const path = join(dirs.playbooks, `${wanted}.md`)
+        let text: string
+        try {
+          text = await readFile(path, 'utf8')
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw notFound
+          throw error
+        }
+        const cap = 6000
+        return text.length <= cap ? text : `${text.slice(0, cap)}\n[Showing ${cap} of ${text.length} chars; the rest is in ${path}]`
       }),
     }))
   }
@@ -333,7 +357,7 @@ export async function apply(ctx: Context, rawConfig: Config): Promise<void> {
         const taskId = normalizeTaskId(String(args.task_id))
         const worker = await readJson<WorkerReport>(reportPath(taskId, 'worker'))
         const report = worker.value
-        const { verdict, trimmed } = buildVerdict(args as Parameters<typeof buildVerdict>[0], report?.report_id ?? null, new Date())
+        const { verdict, trimmed, changes } = buildVerdict(args as Parameters<typeof buildVerdict>[0], report?.report_id ?? null, new Date())
         await mkdir(dirs.reports, { recursive: true })
         try {
           await atomicWrite(reportPath(taskId, 'verdict'), JSON.stringify(verdict))
@@ -360,7 +384,7 @@ export async function apply(ctx: Context, rawConfig: Config): Promise<void> {
         } else {
           const missing = ungradedCriteria(report, verdict)
           if (missing.length > 0) {
-            notes.push(`Playbook not saved: ${missing.map(m => `"${clip(m, 80)}"`).join(', ')} not graded. Call again including ${missing.length === 1 ? 'it' : 'them'} to save.`)
+            notes.push(`Playbook not saved: ${shortList(missing.map(m => `"${clip(m, 80)}"`), 10)} not graded. Call again including ${missing.length === 1 ? 'it' : 'them'} to save.`)
           } else if (report.playbook_steps.length === 0) {
             notes.push('No playbook steps in the report, so no playbook was saved.')
           } else {
@@ -373,7 +397,7 @@ export async function apply(ctx: Context, rawConfig: Config): Promise<void> {
             }
           }
         }
-        return renderVerdictSaved(verdict, trimmed, notes.join(' '))
+        return renderVerdictSaved(verdict, trimmed, notes.join(' '), changes)
       }),
       presentCall: args => ({ card: 'generic', title: `Verdict: ${String(args.task_id)} ${String(args.verdict)}`, kind: 'other', rawInput: args }),
     }))
@@ -382,8 +406,8 @@ export async function apply(ctx: Context, rawConfig: Config): Promise<void> {
   if (has('manager')) {
     register(defineTool({
       name: 'read_task_report_v1',
-      description: 'Check a task after its Worker or Verifier finishes: state, the criteria that need attention, open questions. Use instead of trusting a chat summary.',
-      parameters: { task_id: { type: 'string', required: true, description: 'The task id.' } },
+      description: 'After a Worker or Verifier finishes, read the task state and what needs attention. Trust this over chat summaries.',
+      parameters: { task_id: { type: 'string', required: true } },
       output: textOutput,
       execute: args => guard(async () => {
         const taskId = normalizeTaskId(String(args.task_id))
@@ -396,33 +420,48 @@ export async function apply(ctx: Context, rawConfig: Config): Promise<void> {
     }))
     register(defineTool({
       name: 'find_playbooks_v1',
-      description: 'Before planning a task that resembles earlier work, search playbooks that passed verification. Returns names only; pass the best name to the Worker. Skip for one-off questions.',
-      parameters: { query: { type: 'string', required: true, description: 'A few keywords describing the task.' } },
+      description: 'Before planning work like earlier tasks, find verified playbooks. Returns names; give the best one to the Worker.',
+      parameters: { query: { type: 'string', required: true, description: 'A few keywords.' } },
       output: textOutput,
       execute: args => guard(async () => {
-        const files = await listPlaybooks()
-        const hits = rankPlaybooks(String(args.query), files)
-        const metas = new Map<string, PlaybookMeta>(files.filter(f => hits.some(h => h.name === f.name)).map(f => [f.name, parsePlaybook(f.name, f.text)]))
+        const entries = await indexedPlaybooks()
+        const hits = rankPlaybooks(String(args.query), entries)
+        const metas = new Map<string, PlaybookMeta>(entries.filter(e => hits.some(h => h.name === e.meta.name)).map(e => [e.meta.name, e.meta]))
         return renderPlaybookList(hits, metas)
       }),
     }))
     register(defineTool({
       name: 'recent_lessons_v1',
-      description: 'Recent lessons from earlier tasks, including failures. Use before planning a task like earlier ones. Returns at most a few short lines.',
-      parameters: { query: { type: 'string', description: 'Keywords to filter by; empty for the latest.' } },
+      description: 'Recent lessons from earlier tasks, including failures. Use before planning similar work.',
+      parameters: { query: { type: 'string', description: 'Keywords; empty for the latest.' } },
       output: textOutput,
       execute: args => guard(async () => {
+        // Read only the newest 200 KB: the inbox can grow for years.
+        const WINDOW = 200_000
         let text = ''
+        let total = 0
         try {
-          text = await readFile(lessonsFile, 'utf8')
+          const fh = await open(lessonsFile, 'r')
+          try {
+            total = (await fh.stat()).size
+            const start = Math.max(0, total - WINDOW)
+            const buf = Buffer.alloc(total - start)
+            await fh.read(buf, 0, buf.length, start)
+            text = buf.toString('utf8')
+            if (start > 0) text = text.slice(text.indexOf('\n') + 1) // drop a partial first line
+          } finally {
+            await fh.close()
+          }
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
         }
-        // Read only the newest part of the file: it can grow for years.
-        const lines = text.slice(-200_000).split('\n').filter(l => l.startsWith('- '))
-        const wanted = new Set(words(String(args.query ?? '')))
+        const lines = text.split('\n').filter(l => l.startsWith('- '))
+        const query = String(args.query ?? '').trim()
+        const wanted = new Set(words(query))
+        if (query !== '' && wanted.size === 0) return 'No searchable words in the query (too short or common). Try specific keywords.'
         const picked = (wanted.size === 0 ? lines : lines.filter(l => words(l).some(w => wanted.has(w)))).slice(-10).reverse()
-        return renderLessons(picked.map(l => clip(l, 300)))
+        const out = renderLessons(picked.map(l => clip(l, 300)))
+        return total > WINDOW && wanted.size > 0 ? `${out}\n(Searched the newest ${WINDOW / 1000} KB of lessons only.)` : out
       }),
     }))
   }
