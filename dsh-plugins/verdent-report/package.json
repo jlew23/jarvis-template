@@ -1,0 +1,24 @@
+{
+  "name": "@jarvis/dsh-verdent-report",
+  "version": "0.1.0",
+  "description": "Strict JSON Worker reports and Verifier verdicts, a stop check, lessons log and playbook library for the Verdent layer",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./src/*": "./src/*"
+  },
+  "files": [
+    "lib/*.js",
+    "src/*.ts",
+    "README.md"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": "*",
+    "@deepseek-ai/dsh-tools": "*"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

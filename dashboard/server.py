@@ -6,6 +6,8 @@ import hashlib
 import re
 
 PORT = 8080
+# Local machine only by default. Set JARVIS_HUD_HOST=0.0.0.0 to show the HUD on other devices on your network.
+HOST = os.environ.get('JARVIS_HUD_HOST', '127.0.0.1')
 HISTORY_FILE = os.path.join(os.path.dirname(__file__), '..', '.aider.chat.history.md')
 CONTEXT_LIMIT = 32768 # Default Qwen 14B context limit
 
@@ -96,6 +98,6 @@ class JarvisDashboardHandler(http.server.SimpleHTTPRequestHandler):
 if __name__ == "__main__":
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
     print(f"[JARVIS HUD] Booting up visual interface...")
-    with socketserver.TCPServer(("", PORT), JarvisDashboardHandler) as httpd:
+    with socketserver.TCPServer((HOST, PORT), JarvisDashboardHandler) as httpd:
         print(f"[JARVIS HUD] Serving at http://localhost:{PORT}")
         httpd.serve_forever()
