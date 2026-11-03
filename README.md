@@ -6,12 +6,12 @@
 
 - **`verdent-report`:** Workers submit structured, criteria-based reports; Verifiers grade them; approved results become reusable playbooks. Managers can inspect short reports instead of trusting chat summaries.
 - **`model-fallback`:** After provider-side failures exhaust normal retries, switch an agent's model for its *next* step or turn. The failed step is not replayed automatically.
-- **Compatibility:** `model-fallback` requires **DeepSeek Harness 0.2.2-alpha.2 or newer**; it disables itself on 0.2.1-rc.x. Report hooks have been observed on earlier builds, but full live behavior is not yet validated.
-- **Evidence:** 31/31 build/smoke tests reported on a stand-in host. Live reminder, saved-file, and fallback-warning checks remain pending. This is **not** a production-readiness claim.
+- **Compatibility:** `model-fallback` requires **DeepSeek Harness 0.2.2-alpha.2 or newer**; it disables itself on 0.2.1-rc.x. Report hooks have been observed on earlier builds; compatibility beyond the tested setup should be checked individually.
+- **Evidence:** The maintainer reports three days of intensive live testing in their DeepSeek Harness/Verdent environment, alongside 31/31 automated tests on a stand-in host. Specific live test logs, version coverage, and reproducible results have not yet been published here.
 
 **[Start here: plugin quick start](dsh-plugins/README.md#quick-start-preview)** · [Ready-made preset configurations](dsh-plugins/presets/README.md) · [Review findings](dsh-plugins/FINDINGS.md) · [Draft PR #4](https://github.com/jlew23/jarvis-template/pull/4)
 
-**Feedback wanted:** Try the report plugin on one throwaway task and [tell us where setup or output is confusing](https://github.com/jlew23/jarvis-template/issues/new). Do not use production workloads until live validation is complete.
+**Feedback wanted:** Try the report plugin on one throwaway task and [tell us where setup or output is confusing](https://github.com/jlew23/jarvis-template/issues/new). Check compatibility with your Harness version and try a small task first.
 
 ---
 
