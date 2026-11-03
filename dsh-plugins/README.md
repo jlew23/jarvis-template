@@ -11,6 +11,43 @@ Not built, because DeepSeek already ships them in its base bundle:
 - **Loop detection (item 9):** `@deepseek-ai/dsh-repeat-tool-reminder` nudges at 3, 5 and 8 identical repeats.
 - **Stale-edit protection (item 6):** `@deepseek-ai/dsh-fs-observation-policy` rejects edits to a file that changed since it was read.
 
+## Quick start (preview)
+
+> **Status:** These files exist on [draft, unmerged PR #4](https://github.com/jlew23/jarvis-template/pull/4), not the repository's default branch. The following steps are for a disposable test profile, not production.
+
+**Prerequisites:** Node.js **22.13+**, Git, an existing DeepSeek Harness installation and a disposable Verdent test profile. For `model-fallback`, use **DeepSeek Harness 0.2.2-alpha.2+**. Older 0.2.1-rc builds disable fallback with a warning. The report plugin has partial live loading checks, not complete end-to-end validation.
+
+### 1. Get the proposed plugin source and run the stand-in tests
+
+```bash
+git clone https://github.com/jlew23/jarvis-template.git
+cd jarvis-template
+git fetch origin pull/4/head:verdent-plugins-preview
+git switch verdent-plugins-preview
+cd dsh-plugins
+node --version
+node build.mjs
+node test.mjs
+```
+
+**Verify:** The test command should report **31 passing tests** on the stand-in host. This checks the plugin build and simulated host behavior; it does not prove compatibility with your live installation.
+
+### 2. Configure in a disposable profile
+
+Follow [the install instructions below](#install) to make both plugin packages resolvable by your Harness profile, then copy the appropriate [Team or Test bench preset](presets/README.md). Replace the example Windows `memoryDir`, preset IDs, and model names with your own. **Do not copy the author's `C:\\Users\\Luda` path literally.** The YAML snippets are plugin-list fragments, not a complete standalone patch.
+
+Start with `verdent-report` in a throwaway profile. Mount `role: all` only for single-agent testing, or separate `manager`, `worker`, and `verifier` mounts for a real team. Add `model-fallback` only after confirming your Harness version supports `agent.model.select()`.
+
+### 3. Verify with a harmless task
+
+Send a task labeled `task_id: smoke-001` with one checkable criterion. Submit a Worker report, inspect it with `read_task_report_v1`, then submit a Verifier verdict. Check that files appear under your configured `memoryDir/reports` and `memoryDir/lessons`; a fully passing verdict should create a playbook. For fallback, simulate or observe a qualifying provider failure and verify that **the next step**, not the failed step, uses the backup.
+
+**Current evidence:** 31/31 tests on a stand-in host; live loading of six tools and `read_task_report_v1` reported in a bench profile. Live reminder behavior, saved report files, and fallback warning are still pending independent verification. If a check fails, [open an issue](https://github.com/jlew23/jarvis-template/issues/new) with your Harness version, redacted config, expected behavior, and observed result.
+
+**Demo:** A real end-to-end recording is still needed. No GIF or live fallback video is claimed here until captured.
+
+---
+
 ## verdent-report
 
 Mount it once per preset with a `role`:
@@ -118,7 +155,7 @@ Six ready-made setups (Solo, Team, Team cheap, Strict, Overnight, Test bench), w
 - 20 unit tests for the logic (`*/tests/core.test.ts`).
 - 9 integration tests (`tests/smoke.test.ts`) that load the built `lib/` files on `tests/fake-host.mjs`, a stand-in host that copies the real DeepSeek rules this code depends on: hook order, duplicate tool errors, model selection fixed per step (a plugin that changes it mid-step makes the host throw), and the message kinds Managers and helpers send.
 - A squad review: five tester agents ran about 290 tests over single, combined and stressed setups, then an Opus review panel triaged about 117 findings into the fixes above. That review caught a blocker the first version had (switching the model mid-step is rejected by the real host).
-- **Not yet run inside DeepSeek Harness itself.** The rules were read from DeepSeek's source (`deepseek-ai/deepseek-harness`, October 30 2026), but the first live run on the PC is the real test.
+- **Partial live validation only.** On the target PC, the report hooks were observed on 0.2.1-rc.3, rc.5, and 0.2.2-alpha.2; six tools loaded in a bench profile and `read_task_report_v1` ran. The reminder, saved report files, and fallback warning still require live checks. The 31 passing automated tests use a stand-in host, not a live Harness end-to-end run.
 
 ## Files
 
