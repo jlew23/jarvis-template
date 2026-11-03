@@ -1,3 +1,20 @@
+## DeepSeek Harness × Verdent reliability plugins (preview)
+
+**Make Verdent agents more reliable with validated task reports, reusable playbooks, and automatic model fallback for provider outages.**
+
+> **Preview only — not merged into `master`.** These opt-in plugins are proposed in [draft PR #4](https://github.com/jlew23/jarvis-template/pull/4). Review or check out the PR branch before attempting installation; they are not included in the default clone.
+
+- **`verdent-report`:** Workers submit structured, criteria-based reports; Verifiers grade them; approved results become reusable playbooks. Managers can inspect short reports instead of trusting chat summaries.
+- **`model-fallback`:** After provider-side failures exhaust normal retries, switch an agent's model for its *next* step or turn. The failed step is not replayed automatically.
+- **Compatibility:** `model-fallback` requires **DeepSeek Harness 0.2.2-alpha.2 or newer**; it disables itself on 0.2.1-rc.x. Report hooks have been observed on earlier builds; compatibility beyond the tested setup should be checked individually.
+- **Evidence:** The maintainer reports three days of intensive live testing in their DeepSeek Harness/Verdent environment, alongside 31/31 automated tests on a stand-in host. Specific live test logs, version coverage, and reproducible results have not yet been published here.
+
+**[Start here: plugin quick start](dsh-plugins/README.md#quick-start-preview)** · [Ready-made preset configurations](dsh-plugins/presets/README.md) · [Review findings](dsh-plugins/FINDINGS.md) · [Draft PR #4](https://github.com/jlew23/jarvis-template/pull/4)
+
+**Feedback wanted:** Try the report plugin on one throwaway task and [tell us where setup or output is confusing](https://github.com/jlew23/jarvis-template/issues/new). Check compatibility with your Harness version and try a small task first.
+
+---
+
 # JARVIS - AI Chief of Staff
 
 **JARVIS** (Just A Rather Very Intelligent System) is a custom AI Chief of Staff persona built on top of local LLMs. The default bridge utilizes **Aider** and local models like **Qwen 2.5 Coder 14B** running on **Ollama**. 
