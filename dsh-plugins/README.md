@@ -15,7 +15,7 @@ Not built, because DeepSeek already ships them in its base bundle:
 
 > **Status:** These files exist on [draft, unmerged PR #4](https://github.com/jlew23/jarvis-template/pull/4), not the repository's default branch. The following steps are for a disposable test profile, not production.
 
-**Prerequisites:** Node.js **22.13+**, Git, an existing DeepSeek Harness installation and a disposable Verdent test profile. For `model-fallback`, use **DeepSeek Harness 0.2.2-alpha.2+**. Older 0.2.1-rc builds disable fallback with a warning. The report plugin has partial live loading checks, not complete end-to-end validation.
+**Prerequisites:** Node.js **22.13+**, Git, an existing DeepSeek Harness installation and a disposable Verdent test profile. For `model-fallback`, use **DeepSeek Harness 0.2.2-alpha.2+**. Older 0.2.1-rc builds disable fallback with a warning. The maintainer reports three days of intensive live testing in their environment; exact version coverage and reproducible live test records have not yet been published.
 
 ### 1. Get the proposed plugin source and run the stand-in tests
 
@@ -42,7 +42,7 @@ Start with `verdent-report` in a throwaway profile. Mount `role: all` only for s
 
 Send a task labeled `task_id: smoke-001` with one checkable criterion. Submit a Worker report, inspect it with `read_task_report_v1`, then submit a Verifier verdict. Check that files appear under your configured `memoryDir/reports` and `memoryDir/lessons`; a fully passing verdict should create a playbook. For fallback, simulate or observe a qualifying provider failure and verify that **the next step**, not the failed step, uses the backup.
 
-**Current evidence:** 31/31 tests on a stand-in host; live loading of six tools and `read_task_report_v1` reported in a bench profile. Live reminder behavior, saved report files, and fallback warning are still pending independent verification. If a check fails, [open an issue](https://github.com/jlew23/jarvis-template/issues/new) with your Harness version, redacted config, expected behavior, and observed result.
+**Current evidence:** The maintainer reports three days of intensive live testing with DeepSeek Harness/Verdent, plus 31/31 automated tests on a stand-in host. Earlier bench checks loaded six tools and ran `read_task_report_v1`. A public, reproducible live test matrix is not yet available; do not infer cross-version coverage from the maintainer's setup. If a check fails, [open an issue](https://github.com/jlew23/jarvis-template/issues/new) with your Harness version, redacted config, expected behavior, and observed result.
 
 **Demo:** A real end-to-end recording is still needed. No GIF or live fallback video is claimed here until captured.
 
@@ -155,7 +155,7 @@ Six ready-made setups (Solo, Team, Team cheap, Strict, Overnight, Test bench), w
 - 20 unit tests for the logic (`*/tests/core.test.ts`).
 - 9 integration tests (`tests/smoke.test.ts`) that load the built `lib/` files on `tests/fake-host.mjs`, a stand-in host that copies the real DeepSeek rules this code depends on: hook order, duplicate tool errors, model selection fixed per step (a plugin that changes it mid-step makes the host throw), and the message kinds Managers and helpers send.
 - A squad review: five tester agents ran about 290 tests over single, combined and stressed setups, then an Opus review panel triaged about 117 findings into the fixes above. That review caught a blocker the first version had (switching the model mid-step is rejected by the real host).
-- **Partial live validation only.** On the target PC, the report hooks were observed on 0.2.1-rc.3, rc.5, and 0.2.2-alpha.2; six tools loaded in a bench profile and `read_task_report_v1` ran. The reminder, saved report files, and fallback warning still require live checks. The 31 passing automated tests use a stand-in host, not a live Harness end-to-end run.
+- **Live testing update:** The maintainer reports three days of intensive live use in their DeepSeek Harness/Verdent environment. Earlier recorded checks observed report hooks on 0.2.1-rc.3, rc.5, and 0.2.2-alpha.2, loaded six tools in a bench profile, and ran `read_task_report_v1`. Detailed live test logs and a version-by-version results matrix have not yet been published. The 31 automated tests run on a stand-in host and are separate from this live experience.
 
 ## Files
 
